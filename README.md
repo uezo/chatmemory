@@ -18,9 +18,6 @@ Long-term and medium-term memories with you and chatbot💕
     $ python example.py
     ```
 1. Chat with bot and lastly press Ctrl+C once to exit conversation loop and wait for archiving memories ends.
-    ```bash
-    $ python example.py
-    ```
 1. Start example chatbot again and chat. During the course of the conversation, try asking questions that require memories for answers.
     ```bash
     $ python example.py
