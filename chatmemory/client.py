@@ -2,8 +2,9 @@ import json
 import requests
 
 class ChatMemoryClient:
-    def __init__(self, url: str="http://127.0.0.1:8123"):
+    def __init__(self, url: str="http://127.0.0.1:8123", archive_injection_at: int=2):
         self.url = url
+        self.archive_injection_at = archive_injection_at
 
     def add_histories(self, user_id: str, messages: list):
         requests.post(f"{self.url}/histories/{user_id}", json={"messages": messages})
@@ -32,10 +33,13 @@ class ChatMemoryClient:
         return requests.post(f"{self.url}/archives/{user_id}").json()
 
     def set_archived_histories_message(self, user_id: str, messages: list):
-        if len([m for m in messages if m["role"] == "assistant"]) == 1:
+        if len([m for m in messages if m["role"] == "assistant"]) == self.archive_injection_at - 1:
             archived_histories_content = self.get_archived_histories_content(user_id)
             if archived_histories_content:
-                messages.insert(1, {"role": "user", "content": archived_histories_content})
+                messages.insert(
+                    1 if messages[0]["role"] == "system" else 0,
+                    {"role": "user", "content": archived_histories_content}
+                )
 
     def get_entities(self, user_id: str) -> dict:
         return requests.get(f"{self.url}/entities/{user_id}").json()
