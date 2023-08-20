@@ -32,7 +32,7 @@ messages = [
 
 while True:
     try:
-        # Add message that includes mid-term memory as the first user message at the 2nd tern
+        # Add message that includes mid-term memory as the first user message at the 2nd turn
         chatmemory.set_archived_histories_message(user_id, messages)
 
         u = input("user> ")
@@ -48,7 +48,7 @@ while True:
         print("assistant> " + a)
         messages.append({"role": "assistant", "content": a})
 
-        # Add user and assistant messages in this tern to the database
+        # Add user and assistant messages in this turn to the database
         chatmemory.add_histories(user_id, messages[-2:])
     
     except KeyboardInterrupt:
