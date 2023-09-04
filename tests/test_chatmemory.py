@@ -58,7 +58,7 @@ def test_chat_memory(mocked_create, db_session):
     assert archives[0]["archive"] == "user asked a question and assistant replied."
 
     # parse_entities
-    chat_memory.parse_entities(db_session, user_id)
+    chat_memory.parse_entities(db_session, user_id, datetime.utcnow().date())
     entities = chat_memory.get_entities(db_session, user_id)
     assert entities["nickname"] == "John"
 
@@ -75,7 +75,7 @@ def populated_db(db_session):
     histories = [History(user_id=user_id, role=m["role"], content=m["content"]) for m in test_messages]
     db_session.bulk_save_objects(histories)
     db_session.add(Archive(user_id=user_id, archive_date=datetime.utcnow(), archive="Sample archive"))
-    db_session.add(Entity(user_id=user_id, serialized_entities=json.dumps({"name": "John"})))
+    db_session.add(Entity(user_id=user_id, serialized_entities=json.dumps({"name": "John"}), last_target_date=datetime.utcnow().date()))
     db_session.commit()
     return db_session
 

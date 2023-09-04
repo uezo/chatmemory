@@ -1,7 +1,7 @@
-from datetime import datetime, timedelta
+from datetime import datetime, date, time, timedelta, timezone
 import json
 from logging import getLogger, NullHandler
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, Date
 from sqlalchemy.orm import Session, declarative_base
 from openai import ChatCompletion
 
@@ -36,6 +36,7 @@ class Entity(Base):
     
     timestamp = Column(DateTime, default=datetime.utcnow)
     user_id = Column(String, primary_key=True, index=True)
+    last_target_date = Column(Date, nullable=False)
     serialized_entities = Column(String)
 
 
@@ -139,6 +140,9 @@ class ChatMemory:
     def today(self) -> datetime:
         return datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
+    def date_to_utc_datetime(self, d) -> datetime:
+        return datetime.combine(d, time()).replace(tzinfo=timezone.utc)
+
     def create_database(self, engine):
         Base.metadata.create_all(bind=engine)
 
@@ -186,17 +190,27 @@ class ChatMemory:
 
         return [{ "date": a.archive_date, "archive": a.archive } for a in archives]
 
-    def parse_entities(self, session: Session, user_id: str, target_date: datetime=None):
-        conversation_history = self.get_histories(session, user_id, target_date or self.today())
+    def parse_entities(self, session: Session, user_id: str, target_date: date):
+        # Get histories on target_date
+        since_dt = self.date_to_utc_datetime(target_date)
+        until_dt = since_dt + timedelta(days=1)
+        conversation_history = self.get_histories(session, user_id, since_dt, until_dt)
         if len(conversation_history) == 0:
-            logger.info("No histories found for parsing entities")
+            logger.info(f"No histories found on {target_date} for parsing entities")
             return
 
-        entities = self.entity_parser.parse(conversation_history)
-
+        # Get stored entities or new entities
         stored_entites = session.query(Entity).filter(
             Entity.user_id == user_id,
-        ).first() or Entity(user_id=user_id)
+        ).first() or Entity(user_id=user_id, last_target_date=date.min)
+
+        # Skip parsing if already parsed
+        if stored_entites.last_target_date >= target_date:
+            if datetime.utcnow().date() != target_date:
+                logger.info(f"Entities in histories on {target_date} are already parsed")
+                return
+
+        entities = self.entity_parser.parse(conversation_history)
 
         if stored_entites.serialized_entities:
             entities_json = json.loads(stored_entites.serialized_entities)
@@ -206,6 +220,7 @@ class ChatMemory:
             entities_json = entities
         stored_entites.timestamp = datetime.utcnow()
         stored_entites.serialized_entities = json.dumps(entities_json, ensure_ascii=False)
+        stored_entites.last_target_date = target_date
 
         session.merge(stored_entites)
 

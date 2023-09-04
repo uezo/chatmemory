@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import FastAPI, Depends
 from logging import getLogger
 from pydantic import BaseModel
@@ -122,13 +122,14 @@ class ChatMemoryServer:
 
 
         @app.post("/entities/{user_id}", response_model=ApiResponse)
-        def parse_entities(user_id: str, target_date: str=None, db: Session = Depends(self.get_db)):
+        def parse_entities(user_id: str, target_date: str=None, days: int=1, db: Session = Depends(self.get_db)):
             try:
-                self.chatmemory.parse_entities(
-                    db, user_id,
-                    datetime.strptime(target_date, "%Y-%m-%d") if target_date else None,
-                )
-                db.commit()
+                for i in range(days):
+                    self.chatmemory.parse_entities(
+                        db, user_id,
+                        (datetime.strptime(target_date, "%Y-%m-%d") if target_date else datetime.utcnow()).date() - timedelta(days=days - i - 1),
+                    )
+                    db.commit()
                 return ApiResponse(message="Entities parsed and stored successfully")
 
             except Exception as ex:
