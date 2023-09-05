@@ -218,11 +218,10 @@ class ChatMemory:
             Entity.user_id == user_id,
         ).first() or Entity(user_id=user_id, last_target_date=date.min)
 
-        # Skip parsing if already parsed
-        if stored_entites.last_target_date >= target_date:
-            if datetime.utcnow().date() != target_date:
-                logger.info(f"Entities in histories on {target_date} are already parsed")
-                return
+        # Skip parsing if already parsed (larger than target_date because some histories on last_target_date may be not processed)
+        if stored_entites.last_target_date > target_date:
+            logger.info(f"Entities in histories on {target_date} are already parsed")
+            return
 
         entities = self.entity_parser.parse(conversation_history)
 
