@@ -30,8 +30,20 @@ class Archive(BaseModel):
     archive: str
 
 
+class ArchivesRequest(BaseModel):
+    user_id: str
+    target_date: str=None
+    days: int=1
+
+
 class ArchivesResponse(BaseModel):
     archives: List[Archive]
+
+
+class EntitiesRequest(BaseModel):
+    user_id: str
+    target_date: str=None
+    days: int=1
 
 
 class EntitiesResponse(BaseModel):
@@ -92,12 +104,13 @@ class ChatMemoryServer:
             ])
 
         @app.post("/archives/{user_id}", response_model=ApiResponse)
-        async def archive_histories(user_id: str, target_date: str=None, days: int=1, db: Session = Depends(self.get_db)):
+        async def archive_histories(request: ArchivesRequest, db: Session = Depends(self.get_db)):
             try:
-                for i in range(days):
+                for i in range(request.days):
                     self.chatmemory.archive_histories(
-                        db, user_id,
-                        (datetime.strptime(target_date, "%Y-%m-%d") if target_date else datetime.utcnow()).date() - timedelta(days=days - i - 1),
+                        db, request.user_id,
+                        (datetime.strptime(request.target_date, "%Y-%m-%d") if request.target_date
+                         else datetime.utcnow()).date() - timedelta(days=request.days - i - 1),
                     )
                     db.commit()
                 return ApiResponse(message="Histories archived successfully")
@@ -120,12 +133,13 @@ class ChatMemoryServer:
 
 
         @app.post("/entities/{user_id}", response_model=ApiResponse)
-        async def parse_entities(user_id: str, target_date: str=None, days: int=1, db: Session = Depends(self.get_db)):
+        async def parse_entities(request: EntitiesRequest, db: Session = Depends(self.get_db)):
             try:
-                for i in range(days):
+                for i in range(request.days):
                     self.chatmemory.parse_entities(
-                        db, user_id,
-                        (datetime.strptime(target_date, "%Y-%m-%d") if target_date else datetime.utcnow()).date() - timedelta(days=days - i - 1),
+                        db, request.user_id,
+                        (datetime.strptime(request.target_date, "%Y-%m-%d") if request.target_date
+                         else datetime.utcnow()).date() - timedelta(days=request.days - i - 1),
                     )
                     db.commit()
                 return ApiResponse(message="Entities parsed and stored successfully")
