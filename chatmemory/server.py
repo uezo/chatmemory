@@ -66,7 +66,7 @@ class ChatMemoryServer:
         app = self.app
 
         @app.post("/histories/{user_id}", response_model=ApiResponse)
-        def add_histories(user_id: str, request: HistoriesRequest, db: Session = Depends(self.get_db)):
+        async def add_histories(user_id: str, request: HistoriesRequest, db: Session = Depends(self.get_db)):
             try:
                 self.chatmemory.add_histories(
                     db, user_id,
@@ -78,10 +78,9 @@ class ChatMemoryServer:
             except Exception as ex:
                 logger.error(f"Error at add_histories: {ex}\n{traceback.format_exc()}")
                 return ApiResponse(message="Error")
-            
 
         @app.get("/histories/{user_id}", response_model=HistoriesResponse)
-        def get_histories(user_id: str, since: str=None, until: str=None, db: Session = Depends(self.get_db)):
+        async def get_histories(user_id: str, since: str=None, until: str=None, db: Session = Depends(self.get_db)):
             histories = self.chatmemory.get_histories(
                 db, user_id,
                 datetime.strptime(since, "%Y-%m-%d") if since else None,
@@ -92,9 +91,8 @@ class ChatMemoryServer:
                 for h in histories
             ])
 
-
         @app.post("/archives/{user_id}", response_model=ApiResponse)
-        def archive_histories(user_id: str, target_date: str=None, days: int=1, db: Session = Depends(self.get_db)):
+        async def archive_histories(user_id: str, target_date: str=None, days: int=1, db: Session = Depends(self.get_db)):
             try:
                 for i in range(days):
                     self.chatmemory.archive_histories(
@@ -108,9 +106,8 @@ class ChatMemoryServer:
                 logger.error(f"Error at archive_histories: {ex}\n{traceback.format_exc()}")
                 return ApiResponse(message="Error")
 
-
         @app.get("/archives/{user_id}", response_model=ArchivesResponse)
-        def get_archives(user_id: str, since: str=None, until: str=None, db: Session = Depends(self.get_db)):
+        async def get_archives(user_id: str, since: str=None, until: str=None, db: Session = Depends(self.get_db)):
             archives = self.chatmemory.get_archives(
                 db, user_id,
                 datetime.strptime(since, "%Y-%m-%d") if since else None,
@@ -123,7 +120,7 @@ class ChatMemoryServer:
 
 
         @app.post("/entities/{user_id}", response_model=ApiResponse)
-        def parse_entities(user_id: str, target_date: str=None, days: int=1, db: Session = Depends(self.get_db)):
+        async def parse_entities(user_id: str, target_date: str=None, days: int=1, db: Session = Depends(self.get_db)):
             try:
                 for i in range(days):
                     self.chatmemory.parse_entities(
@@ -137,15 +134,14 @@ class ChatMemoryServer:
                 logger.error(f"Error at parse_entities: {ex}\n{traceback.format_exc()}")
                 return ApiResponse(message="Error")        
 
-
         @app.get("/entities/{user_id}", response_model=EntitiesResponse)
-        def get_entities(user_id: str, db: Session = Depends(self.get_db)):
+        async def get_entities(user_id: str, db: Session = Depends(self.get_db)):
             entities = self.chatmemory.get_entities(db, user_id)
             return EntitiesResponse(entities=entities)
 
 
         @app.delete("/all/{user_id}", response_model=ApiResponse)
-        def delete_all(user_id: str, db: Session = Depends(self.get_db)):
+        async def delete_all(user_id: str, db: Session = Depends(self.get_db)):
             try:
                 self.chatmemory.delete(db, user_id)
                 db.commit()
