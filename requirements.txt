@@ -3,3 +3,4 @@ openai==0.27.8
 requests==2.31.0
 SQLAlchemy==2.0.20
 uvicorn==0.23.1
+pycryptodome==3.18.0

@@ -1,9 +1,14 @@
+import os
 from datetime import datetime, date, time, timedelta, timezone
+import base64
 import json
+import hashlib
 from logging import getLogger, NullHandler
 from sqlalchemy import Column, Integer, String, DateTime, Date
 from sqlalchemy.orm import Session, declarative_base
 from openai import ChatCompletion
+from Crypto.Cipher import AES
+
 
 logger = getLogger(__name__)
 logger.addHandler(NullHandler())
@@ -140,32 +145,52 @@ class ChatMemory:
     def date_to_utc_datetime(self, d) -> datetime:
         return datetime.combine(d, time()).replace(tzinfo=timezone.utc)
 
+    def encrypt(self, text: str, password: str=None):
+        if not password:
+            return text
+
+        salt = os.urandom(16)
+        key = hashlib.scrypt(password=password.encode("utf-8"), salt=salt, n=2**5, r=8, p=1, dklen=32)
+        cipher = AES.new(key, AES.MODE_GCM)
+        cipher_text, tag = cipher.encrypt_and_digest(text.encode("utf-8"))
+        return "-".join([base64.b64encode(item).decode("utf-8") for item in [salt, cipher.nonce, cipher_text, tag]])
+
+    def decrypt(self, encrypted_text: str, password: str=None):
+        if not password:
+            return encrypted_text
+
+        salt, cipher_nonce, cipher_text, tag = [base64.b64decode(item) for item in encrypted_text.split("-")]
+        key = hashlib.scrypt(password=password.encode("utf-8"), salt=salt, n=2**5, r=8, p=1, dklen=32)
+        cipher = AES.new(key, AES.MODE_GCM, cipher_nonce)
+        return cipher.decrypt_and_verify(cipher_text, tag).decode("utf-8")
+
     def create_database(self, engine):
         Base.metadata.create_all(bind=engine)
 
-    def add_histories(self, session: Session, user_id: str, messages: list):
+    def add_histories(self, session: Session, user_id: str, messages: list, password: str=None):
         histories = [
-            History(user_id=user_id, role=m["role"], content=m["content"])
+            History(user_id=user_id, role=m["role"], content=self.encrypt(m["content"], password))
             for m in messages if m["role"] == "user" or m["role"] == "assistant"
         ]
         session.bulk_save_objects(histories)
 
-    def get_histories(self, session: Session, user_id: str, since: datetime=None, until: datetime=None) -> list:
+    def get_histories(self, session: Session, user_id: str, since: datetime=None, until: datetime=None, password: str=None) -> list:
         histories = session.query(History).filter(
             History.user_id == user_id,
             History.timestamp >= (since or datetime.min),
             History.timestamp <= (until or datetime.max)
         ).order_by(History.id).limit(self.history_max_count).all()
 
-        return [{"role": h.role, "content": h.content} for h in histories]
+        return [{"role": h.role, "content": self.decrypt(h.content, password)} for h in histories]
 
-    def archive_histories(self, session: Session, user_id: str, target_date: date):
+    def archive_histories(self, session: Session, user_id: str, target_date: date, password: str=None):
         since_dt = self.date_to_utc_datetime(target_date)
         conversation_history = self.get_histories(
             session,
             user_id,
             since_dt,
-            since_dt + timedelta(days=1)
+            since_dt + timedelta(days=1),
+            password
         )
 
         if len(conversation_history) == 0:
@@ -191,24 +216,24 @@ class ChatMemory:
         summarized_archive = self.history_archiver.archive(conversation_history)
 
         stored_archive.timestamp = datetime.utcnow()
-        stored_archive.archive = summarized_archive
+        stored_archive.archive = self.encrypt(summarized_archive, password)
 
         session.merge(stored_archive)
 
-    def get_archives(self, session: Session, user_id: str, since: date=None, until: date=None) -> list:
+    def get_archives(self, session: Session, user_id: str, since: date=None, until: date=None, password: str=None) -> list:
         archives = session.query(Archive.archive_date, Archive.archive).filter(
             Archive.user_id == user_id,
             Archive.archive_date >= (since or date.min),
             Archive.archive_date <= (until or date.max)
         ).order_by(Archive.archive_date.desc()).limit(self.archive_retrive_count).all()
 
-        return [{ "date": a.archive_date, "archive": a.archive } for a in archives]
+        return [{ "date": a.archive_date, "archive": self.decrypt(a.archive, password) } for a in archives]
 
-    def parse_entities(self, session: Session, user_id: str, target_date: date):
+    def parse_entities(self, session: Session, user_id: str, target_date: date, password: str=None):
         # Get histories on target_date
         since_dt = self.date_to_utc_datetime(target_date)
         until_dt = since_dt + timedelta(days=1)
-        conversation_history = self.get_histories(session, user_id, since_dt, until_dt)
+        conversation_history = self.get_histories(session, user_id, since_dt, until_dt, password)
         if len(conversation_history) == 0:
             logger.info(f"No histories found on {target_date} for parsing entities")
             return
@@ -226,24 +251,24 @@ class ChatMemory:
         entities = self.entity_parser.parse(conversation_history)
 
         if stored_entites.serialized_entities:
-            entities_json = json.loads(stored_entites.serialized_entities)
+            entities_json = json.loads(self.decrypt(stored_entites.serialized_entities, password))
             for k, v in entities.items():
                 entities_json[k] = v
         else:
             entities_json = entities
         stored_entites.timestamp = datetime.utcnow()
-        stored_entites.serialized_entities = json.dumps(entities_json, ensure_ascii=False)
+        stored_entites.serialized_entities = self.encrypt(json.dumps(entities_json, ensure_ascii=False), password)
         stored_entites.last_target_date = target_date
 
         session.merge(stored_entites)
 
-    def get_entities(self, session: Session, user_id: str) -> dict:
+    def get_entities(self, session: Session, user_id: str, password: str=None) -> dict:
         entities = session.query(Entity).filter(
             Entity.user_id == user_id,
         ).first()
 
         if entities and entities.serialized_entities:
-            return json.loads(entities.serialized_entities)
+            return json.loads(self.decrypt(entities.serialized_entities, password))
         else:
             return {}
 

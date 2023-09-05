@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Header
 from logging import getLogger
 from pydantic import BaseModel
 import traceback
@@ -78,11 +78,12 @@ class ChatMemoryServer:
         app = self.app
 
         @app.post("/histories/{user_id}", response_model=ApiResponse)
-        async def add_histories(user_id: str, request: HistoriesRequest, db: Session = Depends(self.get_db)):
+        async def add_histories(user_id: str, request: HistoriesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             try:
                 self.chatmemory.add_histories(
                     db, user_id,
-                    [{"role": m.role, "content": m.content} for m in request.messages]
+                    [{"role": m.role, "content": m.content} for m in request.messages],
+                    encryption_key
                 )
                 db.commit()
                 return ApiResponse(message="Histories added successfully")
@@ -92,11 +93,12 @@ class ChatMemoryServer:
                 return ApiResponse(message="Error")
 
         @app.get("/histories/{user_id}", response_model=HistoriesResponse)
-        async def get_histories(user_id: str, since: str=None, until: str=None, db: Session = Depends(self.get_db)):
+        async def get_histories(user_id: str, since: str=None, until: str=None, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             histories = self.chatmemory.get_histories(
                 db, user_id,
                 datetime.strptime(since, "%Y-%m-%d") if since else None,
-                datetime.strptime(until, "%Y-%m-%d") if until else None
+                datetime.strptime(until, "%Y-%m-%d") if until else None,
+                encryption_key
             )
             return HistoriesResponse(messages=[
                 Message(role=h["role"], content=h["content"])
@@ -104,13 +106,14 @@ class ChatMemoryServer:
             ])
 
         @app.post("/archives/{user_id}", response_model=ApiResponse)
-        async def archive_histories(request: ArchivesRequest, db: Session = Depends(self.get_db)):
+        async def archive_histories(request: ArchivesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             try:
                 for i in range(request.days):
                     self.chatmemory.archive_histories(
                         db, request.user_id,
                         (datetime.strptime(request.target_date, "%Y-%m-%d") if request.target_date
                          else datetime.utcnow()).date() - timedelta(days=request.days - i - 1),
+                        encryption_key
                     )
                     db.commit()
                 return ApiResponse(message="Histories archived successfully")
@@ -120,11 +123,12 @@ class ChatMemoryServer:
                 return ApiResponse(message="Error")
 
         @app.get("/archives/{user_id}", response_model=ArchivesResponse)
-        async def get_archives(user_id: str, since: str=None, until: str=None, db: Session = Depends(self.get_db)):
+        async def get_archives(user_id: str, since: str=None, until: str=None, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             archives = self.chatmemory.get_archives(
                 db, user_id,
                 datetime.strptime(since, "%Y-%m-%d") if since else None,
-                datetime.strptime(until, "%Y-%m-%d") if until else None
+                datetime.strptime(until, "%Y-%m-%d") if until else None,
+                encryption_key
             )
             return ArchivesResponse(archives=[
                 Archive(date=a["date"].strftime("%Y-%m-%d"), archive=a["archive"])
@@ -133,13 +137,14 @@ class ChatMemoryServer:
 
 
         @app.post("/entities/{user_id}", response_model=ApiResponse)
-        async def parse_entities(request: EntitiesRequest, db: Session = Depends(self.get_db)):
+        async def parse_entities(request: EntitiesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             try:
                 for i in range(request.days):
                     self.chatmemory.parse_entities(
                         db, request.user_id,
                         (datetime.strptime(request.target_date, "%Y-%m-%d") if request.target_date
                          else datetime.utcnow()).date() - timedelta(days=request.days - i - 1),
+                        encryption_key
                     )
                     db.commit()
                 return ApiResponse(message="Entities parsed and stored successfully")
@@ -149,8 +154,8 @@ class ChatMemoryServer:
                 return ApiResponse(message="Error")        
 
         @app.get("/entities/{user_id}", response_model=EntitiesResponse)
-        async def get_entities(user_id: str, db: Session = Depends(self.get_db)):
-            entities = self.chatmemory.get_entities(db, user_id)
+        async def get_entities(user_id: str, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
+            entities = self.chatmemory.get_entities(db, user_id, encryption_key)
             return EntitiesResponse(entities=entities)
 
 
@@ -164,6 +169,7 @@ class ChatMemoryServer:
             except Exception as ex:
                 logger.error(f"Error at delete_all: {ex}\n{traceback.format_exc()}")
                 return ApiResponse(message="Error")        
+
 
     def start(self, host :str="127.0.0.1", port: int=8123):
         uvicorn.run(self.app, host=host, port=port)
