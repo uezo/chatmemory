@@ -94,13 +94,14 @@ class ChatMemoryServer:
 
 
         @app.post("/archives/{user_id}", response_model=ApiResponse)
-        def archive_histories(user_id: str, target_date: str=None, db: Session = Depends(self.get_db)):
+        def archive_histories(user_id: str, target_date: str=None, days: int=1, db: Session = Depends(self.get_db)):
             try:
-                self.chatmemory.archive_histories(
-                    db, user_id,
-                    datetime.strptime(target_date, "%Y-%m-%d") if target_date else None,
-                )
-                db.commit()
+                for i in range(days):
+                    self.chatmemory.archive_histories(
+                        db, user_id,
+                        (datetime.strptime(target_date, "%Y-%m-%d") if target_date else datetime.utcnow()).date() - timedelta(days=days - i - 1),
+                    )
+                    db.commit()
                 return ApiResponse(message="Histories archived successfully")
 
             except Exception as ex:
@@ -112,8 +113,8 @@ class ChatMemoryServer:
         def get_archives(user_id: str, since: str=None, until: str=None, db: Session = Depends(self.get_db)):
             archives = self.chatmemory.get_archives(
                 db, user_id,
-                datetime.strptime(since + "+0000", "%Y-%m-%d%z") if since else None,
-                datetime.strptime(until + "+0000", "%Y-%m-%d%z") if until else None
+                datetime.strptime(since, "%Y-%m-%d") if since else None,
+                datetime.strptime(until, "%Y-%m-%d") if until else None
             )
             return ArchivesResponse(archives=[
                 Archive(date=a["date"].strftime("%Y-%m-%d"), archive=a["archive"])

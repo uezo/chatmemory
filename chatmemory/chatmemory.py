@@ -27,7 +27,7 @@ class Archive(Base):
     
     timestamp = Column(DateTime, default=datetime.utcnow)
     user_id = Column(String, primary_key=True, index=True)
-    archive_date = Column(DateTime, primary_key=True, index=True)
+    archive_date = Column(Date, primary_key=True, index=True)
     archive = Column(String)
 
 
@@ -137,9 +137,6 @@ class ChatMemory:
         self.history_max_count = 100
         self.archive_retrive_count = 5
 
-    def today(self) -> datetime:
-        return datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-
     def date_to_utc_datetime(self, d) -> datetime:
         return datetime.combine(d, time()).replace(tzinfo=timezone.utc)
 
@@ -162,30 +159,47 @@ class ChatMemory:
 
         return [{"role": h.role, "content": h.content} for h in histories]
 
-    def archive_histories(self, session: Session, user_id: str, target_date: datetime=None):
-        target_date = target_date or self.today()
-        conversation_history = self.get_histories(session, user_id, target_date, target_date + timedelta(days=1))
-        
-        if conversation_history:
-            summarized_archive = self.history_archiver.archive(conversation_history)
-            
-            new_archive_entry = Archive(
-                timestamp=datetime.utcnow(),
-                user_id=user_id,
-                archive_date=target_date,
-                archive=summarized_archive
-            )
-            
-            session.merge(new_archive_entry)
-        
-        else:
-            logger.info("No histories found to archive")
+    def archive_histories(self, session: Session, user_id: str, target_date: date):
+        since_dt = self.date_to_utc_datetime(target_date)
+        conversation_history = self.get_histories(
+            session,
+            user_id,
+            since_dt,
+            since_dt + timedelta(days=1)
+        )
 
-    def get_archives(self, session: Session, user_id: str, since: datetime=None, until: datetime=None) -> list:
+        if len(conversation_history) == 0:
+            logger.info(f"No histories found on {target_date} to archive")
+            return
+
+        # Get stored archive
+        stored_archive = session.query(Archive).filter(
+            Archive.user_id == user_id,
+            Archive.archive_date == target_date
+        ).first() or Archive(
+            user_id=user_id,
+            timestamp=datetime.min,
+            archive_date=target_date
+        )
+
+        # Skip if already archived
+        if stored_archive:
+            if stored_archive.timestamp.date() > target_date:
+                logger.info(f"Histories on {target_date} are already archived")
+                return
+
+        summarized_archive = self.history_archiver.archive(conversation_history)
+
+        stored_archive.timestamp = datetime.utcnow()
+        stored_archive.archive = summarized_archive
+
+        session.merge(stored_archive)
+
+    def get_archives(self, session: Session, user_id: str, since: date=None, until: date=None) -> list:
         archives = session.query(Archive.archive_date, Archive.archive).filter(
             Archive.user_id == user_id,
-            Archive.archive_date >= (since or datetime.min),
-            Archive.archive_date <= (until or datetime.max)
+            Archive.archive_date >= (since or date.min),
+            Archive.archive_date <= (until or date.max)
         ).order_by(Archive.archive_date.desc()).limit(self.archive_retrive_count).all()
 
         return [{ "date": a.archive_date, "archive": a.archive } for a in archives]

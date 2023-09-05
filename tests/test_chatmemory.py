@@ -52,7 +52,7 @@ def test_chat_memory(mocked_create, db_session):
     assert histories[1]["role"] == "assistant"
 
     # archive_histories
-    chat_memory.archive_histories(db_session, user_id)
+    chat_memory.archive_histories(db_session, user_id, datetime.utcnow().date())
     archives = chat_memory.get_archives(db_session, user_id)
     assert len(archives) == 1
     assert archives[0]["archive"] == "user asked a question and assistant replied."
