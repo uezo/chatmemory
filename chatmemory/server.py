@@ -31,7 +31,6 @@ class Archive(BaseModel):
 
 
 class ArchivesRequest(BaseModel):
-    user_id: str
     target_date: str=None
     days: int=1
 
@@ -41,7 +40,6 @@ class ArchivesResponse(BaseModel):
 
 
 class EntitiesRequest(BaseModel):
-    user_id: str
     target_date: str=None
     days: int=1
 
@@ -106,11 +104,11 @@ class ChatMemoryServer:
             ])
 
         @app.post("/archives/{user_id}", response_model=ApiResponse)
-        async def archive_histories(request: ArchivesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
+        async def archive_histories(user_id: str, request: ArchivesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             try:
                 for i in range(request.days):
                     self.chatmemory.archive_histories(
-                        db, request.user_id,
+                        db, user_id,
                         (datetime.strptime(request.target_date, "%Y-%m-%d") if request.target_date
                          else datetime.utcnow()).date() - timedelta(days=request.days - i - 1),
                         encryption_key
@@ -137,11 +135,11 @@ class ChatMemoryServer:
 
 
         @app.post("/entities/{user_id}", response_model=ApiResponse)
-        async def parse_entities(request: EntitiesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
+        async def parse_entities(user_id: str, request: EntitiesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             try:
                 for i in range(request.days):
                     self.chatmemory.parse_entities(
-                        db, request.user_id,
+                        db, user_id,
                         (datetime.strptime(request.target_date, "%Y-%m-%d") if request.target_date
                          else datetime.utcnow()).date() - timedelta(days=request.days - i - 1),
                         encryption_key
