@@ -47,10 +47,14 @@ class Entity(Base):
 
 # Archiver
 class HistoryArchiver:
-    def __init__(self, api_key: str, model: str="gpt-3.5-turbo-16k-0613", archive_length: int=100):
+    PROMPT_EN = "Please summarize the content of the following conversation in the original language of the content(e.g. content in Japanese should be summarize in Japanese), in about {archive_length} words, paying attention to the topics discussed. Write the summary in third-person perspective, with 'user' and 'assistant' as the subjects.\n\n{histories_text}"
+    PROMPT_JA = "以下の会話の内容を、話題等に注目して{archive_length}文字以内程度の日本語で要約してください。要約した文章は第三者視点で、主語はuserとasssitantとします。\n\n{histories_text}"
+
+    def __init__(self, api_key: str, model: str="gpt-3.5-turbo-16k-0613", archive_length: int=100, prompt: str=PROMPT_EN):
         self.api_key = api_key
         self.model = model
         self.archive_length = archive_length
+        self.archive_prompt = prompt
 
     def archive(self, messages: list):
         histories_text = ""
@@ -59,12 +63,12 @@ class HistoryArchiver:
                 histories_text += f'- {m["role"]}: {m["content"]}\n'
 
         histories = [
-            {"role": "user", "content": f"以下の会話の内容を、話題等に注目して{self.archive_length}文字以内程度で要約してください。要約した文章は第三者視点で、主語はuserとasssitantとします。\n\n{histories_text}"}
+            {"role": "user", "content": self.archive_prompt.format(archive_length=self.archive_length, histories_text=histories_text)}
         ]
 
         functions = [{
             "name": "save_summarized_histories",
-            "description": "会話の内容を話題に注目して要約して保存する",
+            "description": "Summarize the content of the conversation.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -90,17 +94,21 @@ class HistoryArchiver:
 
 # Parser
 class EntityParser:
-    def __init__(self, api_key: str, model: str="gpt-3.5-turbo-16k-0613"):
+    PROMPT_EN = "From the conversation history, please extract any information that should be remembered about the user in original language. If there are already stored items, overwrite the new information with the same item key."
+    PROMPT_JA = "会話の履歴の中から、ユーザーに関して覚えておくべき情報があれば抽出してください。既に記憶している項目があれば、同じ項目名を使用して新しい情報で上書きします。"
+
+    def __init__(self, api_key: str, model: str="gpt-3.5-turbo-16k-0613", prompt: str=PROMPT_EN):
         self.api_key = api_key
         self.model = model
+        self.parse_prompt = prompt
 
     def parse(self, messages: list):
         histories = [m for m in messages if m["role"] == "user" or m["role"] == "assistant"]
-        histories.append({"role": "user", "content": "会話の履歴の中から、ユーザーに関して覚えておくべき情報があれば抽出してください。nameは英語かつsnake_caseで表現します。"})
+        histories.append({"role": "user", "content": self.parse_prompt})
 
         functions = [{
             "name": "save_entities",
-            "description": "ニックネームや誕生日、所在地、好きなものや嫌いなものなどユーザーに関する情報を保存する",
+            "description": "Extract and save any information that should be remembered about the user.",
             "parameters": {
                 "type": "object",
                 "properties": {

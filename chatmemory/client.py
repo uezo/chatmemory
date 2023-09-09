@@ -29,8 +29,12 @@ class ChatMemoryClient:
 
         return ""
 
-    def archive(self, user_id: str):
-        return requests.post(f"{self.url}/archives/{user_id}").json()
+    def archive(self, user_id: str, target_date: str=None, days: int=None):
+        data = {}
+        if target_date: data["target_date"] = target_date
+        if days: data["days"] = days
+
+        return requests.post(f"{self.url}/archives/{user_id}", json=data).json()
 
     def set_archived_histories_message(self, user_id: str, messages: list):
         if len([m for m in messages if m["role"] == "assistant"]) == self.archive_injection_at - 1:
@@ -61,5 +65,9 @@ class ChatMemoryClient:
         
         return ""
 
-    def parse_entities(self, user_id: str):
-        return requests.post(f"{self.url}/entities/{user_id}").json()
+    def parse_entities(self, user_id: str, target_date: str=None, days: int=None):
+        data = {}
+        if target_date: data["target_date"] = target_date
+        if days: data["days"] = days
+
+        return requests.post(f"{self.url}/entities/{user_id}", json=data).json()
