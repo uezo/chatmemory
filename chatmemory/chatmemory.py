@@ -103,22 +103,21 @@ class HistoryArchiver:
             raise ex
 
 
-# Parser
-class EntityParser:
+class EntityExtractor:
     PROMPT_EN = "From the conversation history, please extract any information that should be remembered about the user in original language. If there are already stored items, overwrite the new information with the same item key."
     PROMPT_JA = "会話の履歴の中から、ユーザーに関して覚えておくべき情報があれば抽出してください。既に記憶している項目があれば、同じ項目名を使用して新しい情報で上書きします。"
 
     def __init__(self, api_key: str, model: str="gpt-3.5-turbo-16k-0613", prompt: str=PROMPT_EN):
         self.api_key = api_key
         self.model = model
-        self.parse_prompt = prompt
+        self.extract_prompt = prompt
 
-    def parse(self, messages: list, entities: dict=None):
+    def extract(self, messages: list, entities: dict=None):
         histories = [m for m in messages if m["role"] == "user" or m["role"] == "assistant"]
 
-        prompt = self.parse_prompt
+        prompt = self.extract_prompt
         if entities:
-            prompt = self.parse_prompt + "\n\nEntities that you already know:\n"
+            prompt = self.extract_prompt + "\n\nEntities that you already know:\n"
             for k, v in entities.items():
                 prompt += f"- {k}: {v}\n"
 
@@ -168,15 +167,15 @@ class EntityParser:
             }
 
         except Exception as ex:
-            logger.error(f"Invalid response form ChatGPT at parse: {resp}\n{ex}\n{traceback.format_exc()}")
+            logger.error(f"Invalid response form ChatGPT at extract: {resp}\n{ex}\n{traceback.format_exc()}")
             raise ex
 
 
 # Memory manager
 class ChatMemory:
-    def __init__(self, api_key: str=None, model: str="gpt-3.5-turbo-16k-0613", history_archiver: HistoryArchiver=None, entity_parser: EntityParser=None):
+    def __init__(self, api_key: str=None, model: str="gpt-3.5-turbo-16k-0613", history_archiver: HistoryArchiver=None, entity_extractor: EntityExtractor=None):
         self.history_archiver = history_archiver or HistoryArchiver(api_key, model)
-        self.entity_parser = entity_parser or EntityParser(api_key, model)
+        self.entity_extractor = entity_extractor or EntityExtractor(api_key, model)
         self.history_max_count = 100
         self.archive_retrive_count = 5
 
@@ -267,13 +266,13 @@ class ChatMemory:
 
         return [{ "date": a.archive_date, "archive": self.decrypt(a.archive, password) } for a in archives]
 
-    def parse_entities(self, session: Session, user_id: str, target_date: date, password: str=None):
+    def extract_entities(self, session: Session, user_id: str, target_date: date, password: str=None):
         # Get histories on target_date
         since_dt = self.date_to_utc_datetime(target_date)
         until_dt = since_dt + timedelta(days=1)
         conversation_history = self.get_histories(session, user_id, since_dt, until_dt, password)
         if len(conversation_history) == 0:
-            logger.info(f"No histories found on {target_date} for parsing entities")
+            logger.info(f"No histories found on {target_date} for extracting entities")
             return
 
         # Get stored entities or new entities
@@ -281,9 +280,9 @@ class ChatMemory:
             Entity.user_id == user_id,
         ).first() or Entity(user_id=user_id, last_target_date=date.min)
 
-        # Skip parsing if already parsed (larger than target_date because some histories on last_target_date may be not processed)
+        # Skip extraction if already extracted (larger than target_date because some histories on last_target_date may be not processed)
         if stored_entites.last_target_date > target_date:
-            logger.info(f"Entities in histories on {target_date} are already parsed")
+            logger.info(f"Entities in histories on {target_date} are already extracted")
             return
 
         if stored_entites.serialized_entities:
@@ -291,7 +290,7 @@ class ChatMemory:
         else:
             entities_json = {}
 
-        new_entities = self.entity_parser.parse(conversation_history, entities_json)
+        new_entities = self.entity_extractor.extract(conversation_history, entities_json)
         for k, v in new_entities.items():
             entities_json[k] = v
 

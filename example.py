@@ -55,7 +55,7 @@ while True:
         break
 
 # Generate long-term memory from the conversation history
-print(chatmemory.parse_entities(user_id))
+print(chatmemory.extract_entities(user_id))
 
 # Generate mid-term memory from the conversation history
 print(chatmemory.archive(user_id))

@@ -57,8 +57,8 @@ def test_chat_memory(mocked_create, db_session):
     assert len(archives) == 1
     assert archives[0]["archive"] == "user asked a question and assistant replied."
 
-    # parse_entities
-    chat_memory.parse_entities(db_session, user_id, datetime.utcnow().date())
+    # extract_entities
+    chat_memory.extract_entities(db_session, user_id, datetime.utcnow().date())
     entities = chat_memory.get_entities(db_session, user_id)
     assert entities["nickname"] == "John"
 

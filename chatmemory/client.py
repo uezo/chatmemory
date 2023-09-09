@@ -65,7 +65,7 @@ class ChatMemoryClient:
         
         return ""
 
-    def parse_entities(self, user_id: str, target_date: str=None, days: int=None):
+    def extract_entities(self, user_id: str, target_date: str=None, days: int=None):
         data = {}
         if target_date: data["target_date"] = target_date
         if days: data["days"] = days

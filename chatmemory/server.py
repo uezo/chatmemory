@@ -135,20 +135,20 @@ class ChatMemoryServer:
 
 
         @app.post("/entities/{user_id}", response_model=ApiResponse)
-        async def parse_entities(user_id: str, request: EntitiesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
+        async def extract_entities(user_id: str, request: EntitiesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             try:
                 for i in range(request.days):
-                    self.chatmemory.parse_entities(
+                    self.chatmemory.extract_entities(
                         db, user_id,
                         (datetime.strptime(request.target_date, "%Y-%m-%d") if request.target_date
                          else datetime.utcnow()).date() - timedelta(days=request.days - i - 1),
                         encryption_key
                     )
                     db.commit()
-                return ApiResponse(message="Entities parsed and stored successfully")
+                return ApiResponse(message="Entities extracted and stored successfully")
 
             except Exception as ex:
-                logger.error(f"Error at parse_entities: {ex}\n{traceback.format_exc()}")
+                logger.error(f"Error at extract_entities: {ex}\n{traceback.format_exc()}")
                 return ApiResponse(message="Error")        
 
         @app.get("/entities/{user_id}", response_model=EntitiesResponse)
