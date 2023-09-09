@@ -102,9 +102,16 @@ class EntityParser:
         self.model = model
         self.parse_prompt = prompt
 
-    def parse(self, messages: list):
+    def parse(self, messages: list, entities: dict=None):
         histories = [m for m in messages if m["role"] == "user" or m["role"] == "assistant"]
-        histories.append({"role": "user", "content": self.parse_prompt})
+
+        prompt = self.parse_prompt
+        if entities:
+            prompt = self.parse_prompt + "\n\nEntities that you already know:\n"
+            for k, v in entities.items():
+                prompt += f"- {k}: {v}\n"
+
+        histories.append({"role": "user", "content": prompt})
 
         functions = [{
             "name": "save_entities",
@@ -256,14 +263,15 @@ class ChatMemory:
             logger.info(f"Entities in histories on {target_date} are already parsed")
             return
 
-        entities = self.entity_parser.parse(conversation_history)
-
         if stored_entites.serialized_entities:
             entities_json = json.loads(self.decrypt(stored_entites.serialized_entities, password))
-            for k, v in entities.items():
-                entities_json[k] = v
         else:
-            entities_json = entities
+            entities_json = {}
+
+        new_entities = self.entity_parser.parse(conversation_history, entities_json)
+        for k, v in new_entities.items():
+            entities_json[k] = v
+
         stored_entites.timestamp = datetime.utcnow()
         stored_entites.serialized_entities = self.encrypt(json.dumps(entities_json, ensure_ascii=False), password)
         stored_entites.last_target_date = target_date
