@@ -4,6 +4,7 @@ import base64
 import json
 import hashlib
 from logging import getLogger, NullHandler
+import traceback
 from sqlalchemy import Column, Integer, String, DateTime, Date
 from sqlalchemy.orm import Session, declarative_base
 from openai import ChatCompletion
@@ -89,7 +90,17 @@ class HistoryArchiver:
             function_call={"name": "save_summarized_histories"}
         )
 
-        return json.loads(resp["choices"][0]["message"]["function_call"]["arguments"])["summarized_text"]
+        try:
+            return json.loads(resp["choices"][0]["message"]["function_call"]["arguments"])["summarized_text"]
+
+        except json.decoder.JSONDecodeError:
+            logger.warning(f"Retry parsing JSON: {resp}")
+            jstr = resp["choices"][0]["message"]["function_call"]["arguments"].replace("\",\n}", "\"\n}")
+            return json.loads(jstr)["summarized_text"]
+
+        except Exception as ex:
+            logger.error(f"Invalid response form ChatGPT at archive: {resp}\n{ex}\n{traceback.format_exc()}")
+            raise ex
 
 
 # Parser
@@ -141,12 +152,24 @@ class EntityParser:
             function_call={"name": "save_entities"}
         )
 
-        return {
-            e["name"]: e["value"] for e
-            in json.loads(
-                resp["choices"][0]["message"]["function_call"]["arguments"]
-            )["entities"]
-        }
+        try:
+            return {
+                e["name"]: e["value"] for e
+                in json.loads(
+                    resp["choices"][0]["message"]["function_call"]["arguments"]
+                )["entities"]
+            }
+        
+        except json.decoder.JSONDecodeError:
+            logger.warning(f"Retry parsing JSON: {resp}")
+            jstr = resp["choices"][0]["message"]["function_call"]["arguments"].replace("\",\n}", "\"\n}")
+            return {
+                e["name"]: e["value"] for e in json.loads(jstr)["entities"]
+            }
+
+        except Exception as ex:
+            logger.error(f"Invalid response form ChatGPT at parse: {resp}\n{ex}\n{traceback.format_exc()}")
+            raise ex
 
 
 # Memory manager
