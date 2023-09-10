@@ -1,27 +1,36 @@
 # chatmemory
 
-Long-term and medium-term memories with you and chatbot💕
+Long-term and medium-term memories between you and chatbot💕
 
 # 🚀 Quick start
 
-1. Clone this repo to your local machine.
-1. Import dependencies.
+1. Install chatmemory.
     ```bash
-    $ pip install -r requirements.txt
+    $ pip install chatmemory
     ```
-1. Start ChatMemory server example.
+
+1. Start ChatMemory server.
     ```bash
-    $ python example_server.py
+    $ python -m chatmemory --key YOUR_OPENAI_APIKEY
     ```
-1. Start example chatbot in another terminal.
+    You can set API Key in environment variables and use specific host and port. See `python -m chatmemory --help`.
+
+1. Make and start [example chatbot](https://github.com/uezo/chatmemory/blob/main/example.py) in another terminal.
     ```bash
     $ python example.py
     ```
+
 1. Chat with bot and lastly press Ctrl+C once to exit conversation loop and wait for archiving memories ends.
+
 1. Start example chatbot again and chat. During the course of the conversation, try asking questions that require memories for answers.
     ```bash
     $ python example.py
     ```
+
+# 📕 API Reference
+
+See http://127.0.0.1:8123/docs after starting ChatMemory server.
+
 
 # 🥳 Chat example
 
@@ -111,7 +120,7 @@ messages at the end of the 1st turn.
 ```
 
 insert virtual mid-turn user message before the 2nd turn.
-This is intended to create a one-shot example that the 1st turn was not influenced by the context of previous conversations, and to encourage subsequent conversations not to be overly influenced.
+This is intended to create a one-shot example that the 1st turn was NOT influenced by the context of previous conversations, and to encourage subsequent conversations not to be overly influenced.
 
 ```json
 [

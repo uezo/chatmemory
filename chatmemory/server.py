@@ -7,7 +7,7 @@ from typing import List, Dict
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 import uvicorn
-from chatmemory.chatmemory import ChatMemory
+from .chatmemory import ChatMemory
 
 logger = getLogger(__name__)
 
@@ -53,7 +53,7 @@ class ApiResponse(BaseModel):
 
 
 class ChatMemoryServer:
-    def __init__(self, openai_apikey: str, database_url: str="sqlite:///chatmemory.db"):
+    def __init__(self, openai_apikey: str, database_url: str="sqlite:///chatmemory.db", server_args: dict=None):
         self.database_url = database_url
         self.engine = create_engine(self.database_url)
         self.session_local = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
@@ -62,7 +62,7 @@ class ChatMemoryServer:
         self.chatmemory = ChatMemory(api_key=self.openai_apikey)
         self.chatmemory.create_database(self.engine)
 
-        self.app = FastAPI()
+        self.app = FastAPI(**(server_args or {"title": "ChatMemory", "version": "0.1.2"}))
         self.setup_handlers()
 
     def get_db(self):
@@ -75,7 +75,7 @@ class ChatMemoryServer:
     def setup_handlers(self):
         app = self.app
 
-        @app.post("/histories/{user_id}", response_model=ApiResponse)
+        @app.post("/histories/{user_id}", response_model=ApiResponse, tags=["History"])
         async def add_histories(user_id: str, request: HistoriesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             try:
                 self.chatmemory.add_histories(
@@ -90,7 +90,7 @@ class ChatMemoryServer:
                 logger.error(f"Error at add_histories: {ex}\n{traceback.format_exc()}")
                 return ApiResponse(message="Error")
 
-        @app.get("/histories/{user_id}", response_model=HistoriesResponse)
+        @app.get("/histories/{user_id}", response_model=HistoriesResponse, tags=["History"])
         async def get_histories(user_id: str, since: str=None, until: str=None, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             histories = self.chatmemory.get_histories(
                 db, user_id,
@@ -103,7 +103,7 @@ class ChatMemoryServer:
                 for h in histories
             ])
 
-        @app.post("/archives/{user_id}", response_model=ApiResponse)
+        @app.post("/archives/{user_id}", response_model=ApiResponse, tags=["Archive"])
         async def archive_histories(user_id: str, request: ArchivesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             try:
                 for i in range(request.days):
@@ -120,7 +120,7 @@ class ChatMemoryServer:
                 logger.error(f"Error at archive_histories: {ex}\n{traceback.format_exc()}")
                 return ApiResponse(message="Error")
 
-        @app.get("/archives/{user_id}", response_model=ArchivesResponse)
+        @app.get("/archives/{user_id}", response_model=ArchivesResponse, tags=["Archive"])
         async def get_archives(user_id: str, since: str=None, until: str=None, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             archives = self.chatmemory.get_archives(
                 db, user_id,
@@ -134,7 +134,7 @@ class ChatMemoryServer:
             ])
 
 
-        @app.post("/entities/{user_id}", response_model=ApiResponse)
+        @app.post("/entities/{user_id}", response_model=ApiResponse, tags=["Entity"])
         async def extract_entities(user_id: str, request: EntitiesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             try:
                 for i in range(request.days):
@@ -151,13 +151,13 @@ class ChatMemoryServer:
                 logger.error(f"Error at extract_entities: {ex}\n{traceback.format_exc()}")
                 return ApiResponse(message="Error")        
 
-        @app.get("/entities/{user_id}", response_model=EntitiesResponse)
+        @app.get("/entities/{user_id}", response_model=EntitiesResponse, tags=["Entity"])
         async def get_entities(user_id: str, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             entities = self.chatmemory.get_entities(db, user_id, encryption_key)
             return EntitiesResponse(entities=entities)
 
 
-        @app.delete("/all/{user_id}", response_model=ApiResponse)
+        @app.delete("/all/{user_id}", response_model=ApiResponse, tags=["All"])
         async def delete_all(user_id: str, db: Session = Depends(self.get_db)):
             try:
                 self.chatmemory.delete(db, user_id)
