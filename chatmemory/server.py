@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Depends, Header
 from logging import getLogger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import traceback
-from typing import List, Dict
+from typing import List, Dict, Optional
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 import uvicorn
@@ -13,44 +13,43 @@ logger = getLogger(__name__)
 
 
 class Message(BaseModel):
-    role: str
-    content: str
+    role: str = Field(..., title="role", description="The role of the author of this message.", example="user")
+    content: Optional[str] = Field(None, title="content", description="The contents of the message.", example="Hello!")
 
 
 class HistoriesRequest(BaseModel):
-    messages: List[Message]
+    messages: List[Message] = Field(..., title="messages", description="A list of messages to store comprising the conversation so far.", example=[{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there!"}])
 
 
 class HistoriesResponse(BaseModel):
-    messages: List[Message]
+    messages: List[Message] = Field(..., title="messages", description="A list of retrieved messages comprising the conversation so far.", example=[{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there!"}])
+
+class ArchivesRequest(BaseModel):
+    target_date: Optional[str] = Field(None, title="target_date", description="Target date in ISO8601 format for creating the summary of conversation.", example="2023-08-11")
+    days: int = Field(1, title="days", description="The number of days to go back in the conversation history for creating an archive.", example=1)
 
 
 class Archive(BaseModel):
-    date: str
-    archive: str
-
-
-class ArchivesRequest(BaseModel):
-    target_date: str=None
-    days: int=1
+    date: str = Field(..., title="date", description="Date in ISO8601 format", example="2023-08-11")
+    archive: str = Field(..., title="archive", description="Summarized text of the conversation on the date.", example="user")
 
 
 class ArchivesResponse(BaseModel):
-    archives: List[Archive]
+    archives: List[Archive] = Field(..., title="archives", description="A list of summarized conversation texts.", example=[{"date": "2023-08-11", "archive": "User and assistant talk about lunch and user says that soba is nice."}, {"date": "2023-08-10", "archive": "User says she loves cats."}])
 
 
 class EntitiesRequest(BaseModel):
-    target_date: str=None
-    days: int=1
-    entities: dict=None
+    target_date: Optional[str] = Field(None, title="target_date", description="Target date in ISO8601 format to extract entities.", example="2023-08-11")
+    days: int = Field(1, title="days", description="The number of days to go back in the conversation history to extract entities.", example=1)
+    entities: Optional[Dict[str, object]] = Field(None, title="entities", description="Entities to store. All existing entities are replaced with this.", example={"nickname": "uezo", "age": 28, "favorite_food": "soba"})
 
 
 class EntitiesResponse(BaseModel):
-    entities: Dict[str, object]
+    entities: Dict[str, object] = Field(..., title="entities", description="Stored entities.", example={"nickname": "uezo", "age": 28, "favorite_food": "soba"})
 
 
 class ApiResponse(BaseModel):
-    message: str
+    message: str = Field(..., title="message", description="Message from API", example="Entities extracted and stored successfully")
 
 
 class ChatMemoryServer:
