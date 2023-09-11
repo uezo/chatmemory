@@ -63,7 +63,7 @@ class ChatMemoryServer:
         self.chatmemory = ChatMemory(api_key=self.openai_apikey)
         self.chatmemory.create_database(self.engine)
 
-        self.app = FastAPI(**(server_args or {"title": "ChatMemory", "version": "0.1.2"}))
+        self.app = FastAPI(**(server_args or {"title": "ChatMemory", "version": "0.1.3"}))
         self.setup_handlers()
 
     def get_db(self):
