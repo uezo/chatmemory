@@ -220,6 +220,9 @@ class ChatMemory:
 
         return [{"role": h.role, "content": self.decrypt(h.content, password)} for h in histories]
 
+    def delete_histories(self, session: Session, user_id: str):
+        session.query(History).filter(History.user_id == user_id).delete()
+
     def archive_histories(self, session: Session, user_id: str, target_date: date, password: str=None):
         since_dt = self.date_to_utc_datetime(target_date)
         conversation_history = self.get_histories(
@@ -265,6 +268,9 @@ class ChatMemory:
         ).order_by(Archive.archive_date.desc()).limit(self.archive_retrive_count).all()
 
         return [{ "date": a.archive_date, "archive": self.decrypt(a.archive, password) } for a in archives]
+
+    def delete_archives(self, session: Session, user_id: str):
+        session.query(Archive).filter(Archive.user_id == user_id).delete()
 
     def extract_entities(self, session: Session, user_id: str, target_date: date, password: str=None):
         # Get histories on target_date
@@ -317,7 +323,10 @@ class ChatMemory:
         else:
             return {}
 
-    def delete(self, session: Session, user_id: str):
+    def delete_entities(self, session: Session, user_id: str):
+        session.query(Entity).filter(Entity.user_id == user_id).delete()
+
+    def delete_all(self, session: Session, user_id: str):
         session.query(History).filter(History.user_id == user_id).delete()
         session.query(Archive).filter(Archive.user_id == user_id).delete()
         session.query(Entity).filter(Entity.user_id == user_id).delete()

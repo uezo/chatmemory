@@ -103,6 +103,12 @@ class ChatMemoryServer:
                 for h in histories
             ])
 
+        @app.delete("/histories/{user_id}", response_model=ApiResponse, tags=["History"])
+        async def delete_histories(user_id: str, db: Session = Depends(self.get_db)):
+            self.chatmemory.delete_histories(db, user_id)
+            db.commit()
+            return ApiResponse(message="All histories are deleted successfully")
+
         @app.post("/archives/{user_id}", response_model=ApiResponse, tags=["Archive"])
         async def archive_histories(user_id: str, request: ArchivesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             try:
@@ -133,6 +139,11 @@ class ChatMemoryServer:
                 for a in archives
             ])
 
+        @app.delete("/archives/{user_id}", response_model=ApiResponse, tags=["Archive"])
+        async def delete_archives(user_id: str, db: Session = Depends(self.get_db)):
+            self.chatmemory.delete_archives(db, user_id)
+            db.commit()
+            return ApiResponse(message="All archives are deleted successfully")
 
         @app.post("/entities/{user_id}", response_model=ApiResponse, tags=["Entity"])
         async def save_entities(user_id: str, request: EntitiesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
@@ -163,10 +174,16 @@ class ChatMemoryServer:
             entities = self.chatmemory.get_entities(db, user_id, encryption_key)
             return EntitiesResponse(entities=entities)
 
+        @app.delete("/entities/{user_id}", response_model=ApiResponse, tags=["Entity"])
+        async def delete_entities(user_id: str, db: Session = Depends(self.get_db)):
+            self.chatmemory.delete_entities(db, user_id)
+            db.commit()
+            return ApiResponse(message="All entities are deleted successfully")
+
         @app.delete("/all/{user_id}", response_model=ApiResponse, tags=["All"])
         async def delete_all(user_id: str, db: Session = Depends(self.get_db)):
             try:
-                self.chatmemory.delete(db, user_id)
+                self.chatmemory.delete_all(db, user_id)
                 db.commit()
                 return ApiResponse(message=f"Delete all data for {user_id} successfully")
 
