@@ -293,12 +293,19 @@ class ChatMemory:
         new_entities = self.entity_extractor.extract(conversation_history, entities_json)
         for k, v in new_entities.items():
             entities_json[k] = v
+        
+        now = datetime.utcnow()
+        self.save_entities(session, user_id, now, now.date(), entities_json, password)
 
-        stored_entites.timestamp = datetime.utcnow()
-        stored_entites.serialized_entities = self.encrypt(json.dumps(entities_json, ensure_ascii=False), password)
-        stored_entites.last_target_date = target_date
+    def save_entities(self, session: Session, user_id: str, timestamp: datetime, last_target_date: date, entities: dict, password: str=None):
+        new_entities = Entity(
+            user_id=user_id,
+            timestamp=timestamp,
+            serialized_entities=self.encrypt(json.dumps(entities, ensure_ascii=False), password),
+            last_target_date=last_target_date if entities else date.min
+        )
 
-        session.merge(stored_entites)
+        session.merge(new_entities)
 
     def get_entities(self, session: Session, user_id: str, password: str=None) -> dict:
         entities = session.query(Entity).filter(

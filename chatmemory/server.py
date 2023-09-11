@@ -42,6 +42,7 @@ class ArchivesResponse(BaseModel):
 class EntitiesRequest(BaseModel):
     target_date: str=None
     days: int=1
+    entities: dict=None
 
 
 class EntitiesResponse(BaseModel):
@@ -135,17 +136,24 @@ class ChatMemoryServer:
 
 
         @app.post("/entities/{user_id}", response_model=ApiResponse, tags=["Entity"])
-        async def extract_entities(user_id: str, request: EntitiesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
+        async def save_entities(user_id: str, request: EntitiesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             try:
-                for i in range(request.days):
-                    self.chatmemory.extract_entities(
-                        db, user_id,
-                        (datetime.strptime(request.target_date, "%Y-%m-%d") if request.target_date
-                         else datetime.utcnow()).date() - timedelta(days=request.days - i - 1),
-                        encryption_key
-                    )
+                now = datetime.utcnow()
+                if request.entities is None:
+                    for i in range(request.days):
+                        self.chatmemory.extract_entities(
+                            db, user_id,
+                            (datetime.strptime(request.target_date, "%Y-%m-%d") if request.target_date
+                            else now).date() - timedelta(days=request.days - i - 1),
+                            encryption_key
+                        )
+                        db.commit()
+                    return ApiResponse(message="Entities extracted and stored successfully")
+            
+                else:
+                    self.chatmemory.save_entities(db, user_id, now, now.date(), request.entities, encryption_key)
                     db.commit()
-                return ApiResponse(message="Entities extracted and stored successfully")
+                    return ApiResponse(message="Entities stored successfully")
 
             except Exception as ex:
                 logger.error(f"Error at extract_entities: {ex}\n{traceback.format_exc()}")
@@ -155,7 +163,6 @@ class ChatMemoryServer:
         async def get_entities(user_id: str, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
             entities = self.chatmemory.get_entities(db, user_id, encryption_key)
             return EntitiesResponse(entities=entities)
-
 
         @app.delete("/all/{user_id}", response_model=ApiResponse, tags=["All"])
         async def delete_all(user_id: str, db: Session = Depends(self.get_db)):
