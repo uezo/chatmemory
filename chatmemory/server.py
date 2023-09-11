@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Depends, Header
+from fastapi.responses import JSONResponse
 from logging import getLogger
 from pydantic import BaseModel, Field
 import traceback
@@ -88,26 +89,40 @@ class ChatMemoryServer:
             
             except Exception as ex:
                 logger.error(f"Error at add_histories: {ex}\n{traceback.format_exc()}")
-                return ApiResponse(message="Error")
+                return JSONResponse("Internal server error", 500)
 
         @app.get("/histories/{user_id}", response_model=HistoriesResponse, tags=["History"])
         async def get_histories(user_id: str, since: str=None, until: str=None, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
-            histories = self.chatmemory.get_histories(
-                db, user_id,
-                datetime.strptime(since, "%Y-%m-%d") if since else None,
-                datetime.strptime(until, "%Y-%m-%d") if until else None,
-                encryption_key
-            )
-            return HistoriesResponse(messages=[
-                Message(role=h["role"], content=h["content"])
-                for h in histories
-            ])
+            try:
+                histories = self.chatmemory.get_histories(
+                    db, user_id,
+                    datetime.strptime(since, "%Y-%m-%d") if since else None,
+                    datetime.strptime(until, "%Y-%m-%d") if until else None,
+                    encryption_key
+                )
+                return HistoriesResponse(messages=[
+                    Message(role=h["role"], content=h["content"])
+                    for h in histories
+                ])
+
+            except ValueError as verr:
+                return JSONResponse("Invalid encryption key", 400)
+
+            except Exception as ex:
+                logger.error(f"Error at get_histories: {ex}\n{traceback.format_exc()}")
+                return JSONResponse("Internal server error", 500)
+
 
         @app.delete("/histories/{user_id}", response_model=ApiResponse, tags=["History"])
         async def delete_histories(user_id: str, db: Session = Depends(self.get_db)):
-            self.chatmemory.delete_histories(db, user_id)
-            db.commit()
-            return ApiResponse(message="All histories are deleted successfully")
+            try:
+                self.chatmemory.delete_histories(db, user_id)
+                db.commit()
+                return ApiResponse(message="All histories are deleted successfully")
+
+            except Exception as ex:
+                logger.error(f"Error at delete_histories: {ex}\n{traceback.format_exc()}")
+                return JSONResponse("Internal server error", 500)
 
         @app.post("/archives/{user_id}", response_model=ApiResponse, tags=["Archive"])
         async def archive_histories(user_id: str, request: ArchivesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
@@ -124,26 +139,40 @@ class ChatMemoryServer:
 
             except Exception as ex:
                 logger.error(f"Error at archive_histories: {ex}\n{traceback.format_exc()}")
-                return ApiResponse(message="Error")
+                return JSONResponse("Internal server error", 500)
 
         @app.get("/archives/{user_id}", response_model=ArchivesResponse, tags=["Archive"])
         async def get_archives(user_id: str, since: str=None, until: str=None, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
-            archives = self.chatmemory.get_archives(
-                db, user_id,
-                datetime.strptime(since, "%Y-%m-%d") if since else None,
-                datetime.strptime(until, "%Y-%m-%d") if until else None,
-                encryption_key
-            )
-            return ArchivesResponse(archives=[
-                Archive(date=a["date"].strftime("%Y-%m-%d"), archive=a["archive"])
-                for a in archives
-            ])
+            try:
+                archives = self.chatmemory.get_archives(
+                    db, user_id,
+                    datetime.strptime(since, "%Y-%m-%d") if since else None,
+                    datetime.strptime(until, "%Y-%m-%d") if until else None,
+                    encryption_key
+                )
+                return ArchivesResponse(archives=[
+                    Archive(date=a["date"].strftime("%Y-%m-%d"), archive=a["archive"])
+                    for a in archives
+                ])
+
+            except ValueError as verr:
+                return JSONResponse("Invalid encryption key", 400)
+
+            except Exception as ex:
+                logger.error(f"Error at get_archives: {ex}\n{traceback.format_exc()}")
+                return JSONResponse("Internal server error", 500)
+
 
         @app.delete("/archives/{user_id}", response_model=ApiResponse, tags=["Archive"])
         async def delete_archives(user_id: str, db: Session = Depends(self.get_db)):
-            self.chatmemory.delete_archives(db, user_id)
-            db.commit()
-            return ApiResponse(message="All archives are deleted successfully")
+            try:
+                self.chatmemory.delete_archives(db, user_id)
+                db.commit()
+                return ApiResponse(message="All archives are deleted successfully")
+
+            except Exception as ex:
+                logger.error(f"Error at delete_archives: {ex}\n{traceback.format_exc()}")
+                return JSONResponse("Internal server error", 500)
 
         @app.post("/entities/{user_id}", response_model=ApiResponse, tags=["Entity"])
         async def save_entities(user_id: str, request: EntitiesRequest, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
@@ -166,19 +195,33 @@ class ChatMemoryServer:
                     return ApiResponse(message="Entities stored successfully")
 
             except Exception as ex:
-                logger.error(f"Error at extract_entities: {ex}\n{traceback.format_exc()}")
-                return ApiResponse(message="Error")        
+                logger.error(f"Error at save_entities: {ex}\n{traceback.format_exc()}")
+                return JSONResponse("Internal server error", 500)
+
 
         @app.get("/entities/{user_id}", response_model=EntitiesResponse, tags=["Entity"])
         async def get_entities(user_id: str, encryption_key: str = Header(default=None), db: Session = Depends(self.get_db)):
-            entities = self.chatmemory.get_entities(db, user_id, encryption_key)
-            return EntitiesResponse(entities=entities)
+            try:
+                entities = self.chatmemory.get_entities(db, user_id, encryption_key)
+                return EntitiesResponse(entities=entities)
+
+            except ValueError as verr:
+                return JSONResponse("Invalid encryption key", 400)
+
+            except Exception as ex:
+                logger.error(f"Error at get_entities: {ex}\n{traceback.format_exc()}")
+                return JSONResponse("Internal server error", 500)
 
         @app.delete("/entities/{user_id}", response_model=ApiResponse, tags=["Entity"])
         async def delete_entities(user_id: str, db: Session = Depends(self.get_db)):
-            self.chatmemory.delete_entities(db, user_id)
-            db.commit()
-            return ApiResponse(message="All entities are deleted successfully")
+            try:
+                self.chatmemory.delete_entities(db, user_id)
+                db.commit()
+                return ApiResponse(message="All entities are deleted successfully")
+
+            except Exception as ex:
+                logger.error(f"Error at delete_entities: {ex}\n{traceback.format_exc()}")
+                return JSONResponse("Internal server error", 500)
 
         @app.delete("/all/{user_id}", response_model=ApiResponse, tags=["All"])
         async def delete_all(user_id: str, db: Session = Depends(self.get_db)):
@@ -189,7 +232,7 @@ class ChatMemoryServer:
 
             except Exception as ex:
                 logger.error(f"Error at delete_all: {ex}\n{traceback.format_exc()}")
-                return ApiResponse(message="Error")        
+                return JSONResponse("Internal server error", 500)
 
 
     def start(self, host :str="127.0.0.1", port: int=8123):
