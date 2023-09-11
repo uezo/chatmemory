@@ -156,14 +156,14 @@ class EntityExtractor:
                 e["name"]: e["value"] for e
                 in json.loads(
                     resp["choices"][0]["message"]["function_call"]["arguments"]
-                )["entities"]
+                ).get("entities") or []
             }
         
         except json.decoder.JSONDecodeError:
             logger.warning(f"Retry parsing JSON: {resp}")
             jstr = resp["choices"][0]["message"]["function_call"]["arguments"].replace("\",\n}", "\"\n}")
             return {
-                e["name"]: e["value"] for e in json.loads(jstr)["entities"]
+                e["name"]: e["value"] for e in json.loads(jstr).get("entities") or []
             }
 
         except Exception as ex:
