@@ -7,7 +7,7 @@ from logging import getLogger, NullHandler
 import traceback
 from sqlalchemy import Column, Integer, String, DateTime, Date
 from sqlalchemy.orm import Session, declarative_base
-import opena
+import openai
 from Crypto.Cipher import AES
 
 logger = getLogger(__name__)
