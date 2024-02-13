@@ -50,7 +50,7 @@ class HistoryArchiver:
     PROMPT_EN = "Please summarize the content of the following conversation in the original language of the content(e.g. content in Japanese should be summarize in Japanese), in about {archive_length} words, paying attention to the topics discussed. Write the summary in third-person perspective, with 'user' and 'assistant' as the subjects.\n\n{histories_text}"
     PROMPT_JA = "以下の会話の内容を、話題等に注目して{archive_length}文字以内程度の日本語で要約してください。要約した文章は第三者視点で、主語はuserとasssitantとします。\n\n{histories_text}"
 
-    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo-16k", archive_length: int = 100,
+    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo-0125", archive_length: int = 100,
                  prompt: str = PROMPT_EN):
         self.api_key = api_key
         self.model = model
@@ -111,7 +111,7 @@ class EntityExtractor:
     PROMPT_EN = "From the conversation history, please extract any information that should be remembered about the user in original language. If there are already stored items, overwrite the new information with the same item key."
     PROMPT_JA = "会話の履歴の中から、ユーザーに関して覚えておくべき情報があれば抽出してください。既に記憶している項目があれば、同じ項目名を使用して新しい情報で上書きします。"
 
-    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo-16k", prompt: str = PROMPT_EN):
+    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo-0125", prompt: str = PROMPT_EN):
         self.api_key = api_key
         self.model = model
         self.extract_prompt = prompt
@@ -181,7 +181,7 @@ class EntityExtractor:
 
 # Memory manager
 class ChatMemory:
-    def __init__(self, api_key: str = None, model: str = "gpt-3.5-turbo-16k", history_archiver: HistoryArchiver = None,
+    def __init__(self, api_key: str = None, model: str = "gpt-3.5-turbo-0125", history_archiver: HistoryArchiver = None,
                  entity_extractor: EntityExtractor = None):
         self.history_archiver = history_archiver or HistoryArchiver(api_key, model)
         self.entity_extractor = entity_extractor or EntityExtractor(api_key, model)
