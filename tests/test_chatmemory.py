@@ -1,102 +1,99 @@
+import asyncio
+import os
+import uuid
 import pytest
-from unittest.mock import patch, MagicMock
-from datetime import datetime
-import json
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from chatmemory.chatmemory import Base, ChatMemory, History, Archive, Entity
+from chatmemory import ChatMemory, HistoryMessage
 
-engine = create_engine("sqlite:///:memory:")
-SessionLocal = sessionmaker(bind=engine)
 
-serialized_arguments = json.dumps({
-    "entities": [
-        {"name": "nickname", "value": "John"}
-    ],
-    "summarized_text": "user asked a question and assistant replied."
-})
-mocked_response = {
-    "choices": [
-        {
-            "message": {
-                "function_call": {
-                    "arguments": serialized_arguments
-                }
-            }
-        }
+DB_NAME = os.getenv("DB_NAME", "your_db")
+DB_USER = os.getenv("DB_USER", "your_user")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "your_password")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", 5432)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your_openai_api_key")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
+
+# Fixture to instantiate ChatMemory with real configuration.
+# Be sure to configure these parameters appropriately for your environment.
+@pytest.fixture(scope="module")
+def chat_memory():
+    cm = ChatMemory(
+        openai_api_key=OPENAI_API_KEY,
+        openai_base_url=OPENAI_BASE_URL,
+        llm_model=LLM_MODEL,
+        db_name=DB_NAME,
+        db_user=DB_USER,
+        db_password=DB_PASSWORD,
+        db_port=DB_PORT
+    )
+    yield cm
+
+def test_add_and_get_history(chat_memory):
+    # Generate unique user_id and session_id for isolation.
+    user_id = str(uuid.uuid4())
+    session_id = f"session_{uuid.uuid4()}"
+    messages = [
+        HistoryMessage(role="user", content="Hello", metadata={}),
+        HistoryMessage(role="assistant", content="Hi there!", metadata={}),
     ]
-}
+    # Add history
+    chat_memory.add_history(user_id, session_id, messages)
+    # Retrieve history and verify
+    history = chat_memory.get_history(user_id=user_id, session_id=session_id)
+    assert len(history) == len(messages)
+    # Cleanup: delete history
+    chat_memory.delete_history(user_id=user_id, session_id=session_id)
+    history_after = chat_memory.get_history(user_id=user_id, session_id=session_id)
+    assert len(history_after) == 0
 
-test_messages = [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there!"}]
+def test_create_summary(chat_memory):
+    user_id = str(uuid.uuid4())
+    session_id = f"session_{uuid.uuid4()}"
+    messages = [
+        HistoryMessage(role="user", content="How is the weather today?", metadata={}),
+        HistoryMessage(role="assistant", content="It is sunny.", metadata={})
+    ]
+    chat_memory.add_history(user_id, session_id, messages)
+    # Create summary (this calls the LLM and embeddings)
+    asyncio.run(chat_memory.create_summary(user_id, session_id))
+    # Retrieve summaries and verify at least one exists
+    summaries = chat_memory.get_summaries(user_id=user_id, session_id=session_id)
+    assert len(summaries) >= 1
+    # Cleanup: delete history and summaries
+    chat_memory.delete_history(user_id=user_id, session_id=session_id)
+    chat_memory.delete_summaries(user_id=user_id, session_id=session_id)
 
+def test_add_get_delete_knowledge(chat_memory):
+    user_id = str(uuid.uuid4())
+    knowledge_text = "Test knowledge content for unit testing."
+    # Add knowledge record
+    asyncio.run(chat_memory.add_knowledge(user_id, knowledge_text))
+    knowledges = chat_memory.get_knowledge(user_id)
+    assert any(knowledge_text in k.knowledge for k in knowledges)
+    # Delete knowledge for this user
+    chat_memory.delete_knowledge(user_id)
+    knowledges_after = chat_memory.get_knowledge(user_id)
+    assert len(knowledges_after) == 0
 
-@pytest.fixture
-def db_session():
-    Base.metadata.create_all(bind=engine)
-    session = SessionLocal()
-    yield session
-    session.close()
-    Base.metadata.drop_all(bind=engine)
-
-
-@patch("openai.ChatCompletion.create", return_value=mocked_response)
-def test_chat_memory(mocked_create, db_session):
-    chat_memory = ChatMemory(api_key="fake_key")
-
-    # add_histories
-    user_id = "test_user"
-    chat_memory.add_histories(db_session, user_id, test_messages)
-    histories = chat_memory.get_histories(db_session, user_id)
-    assert len(histories) == 2
-    assert histories[0]["role"] == "user"
-    assert histories[1]["role"] == "assistant"
-
-    # archive_histories
-    chat_memory.archive_histories(db_session, user_id, datetime.utcnow().date())
-    archives = chat_memory.get_archives(db_session, user_id)
-    assert len(archives) == 1
-    assert archives[0]["archive"] == "user asked a question and assistant replied."
-
-    # extract_entities
-    chat_memory.extract_entities(db_session, user_id, datetime.utcnow().date())
-    entities = chat_memory.get_entities(db_session, user_id)
-    assert entities["nickname"] == "John"
-
-    # delete
-    chat_memory.delete(db_session, user_id)
-    assert db_session.query(History).filter_by(user_id=user_id).count() == 0
-    assert db_session.query(Archive).filter_by(user_id=user_id).count() == 0
-    assert db_session.query(Entity).filter_by(user_id=user_id).count() == 0
-
-
-@pytest.fixture
-def populated_db(db_session):
-    user_id = "test_user"
-    histories = [History(user_id=user_id, role=m["role"], content=m["content"]) for m in test_messages]
-    db_session.bulk_save_objects(histories)
-    db_session.add(Archive(user_id=user_id, archive_date=datetime.utcnow(), archive="Sample archive"))
-    db_session.add(Entity(user_id=user_id, serialized_entities=json.dumps({"name": "John"}), last_target_date=datetime.utcnow().date()))
-    db_session.commit()
-    return db_session
-
-
-def test_get_histories(populated_db):
-    chat_memory = ChatMemory(api_key="fake_key")
-    histories = chat_memory.get_histories(populated_db, "test_user")
-    assert len(histories) == 2
-    assert histories[0]["content"] == "Hello"
-    assert histories[1]["content"] == "Hi there!"
-
-
-def test_get_archives(populated_db):
-    chat_memory = ChatMemory(api_key="fake_key")
-    archives = chat_memory.get_archives(populated_db, "test_user")
-    assert len(archives) == 1
-    assert archives[0]["archive"] == "Sample archive"
-
-
-def test_get_entities(populated_db):
-    chat_memory = ChatMemory(api_key="fake_key")
-    entities = chat_memory.get_entities(populated_db, "test_user")
-    assert "name" in entities
-    assert entities["name"] == "John"
+def test_search(chat_memory):
+    user_id = str(uuid.uuid4())
+    session_id = f"session_{uuid.uuid4()}"
+    # Add conversation history that should be searchable.
+    messages = [
+        HistoryMessage(role="user", content="Tell me a joke", metadata={}),
+        HistoryMessage(role="assistant", content="Why did the chicken cross the road?", metadata={})
+    ]
+    chat_memory.add_history(user_id, session_id, messages)
+    # Create summary so that search has something to work with.
+    asyncio.run(chat_memory.create_summary(user_id, session_id))
+    # Perform search.
+    search_result = asyncio.run(
+        chat_memory.search(user_id, "joke", top_k=3, search_content=False, include_retrieved_data=True)
+    )
+    # Verify that a non-empty answer was returned.
+    assert search_result is not None
+    assert isinstance(search_result.answer, str)
+    # Cleanup
+    chat_memory.delete_history(user_id=user_id, session_id=session_id)
+    chat_memory.delete_summaries(user_id=user_id, session_id=session_id)

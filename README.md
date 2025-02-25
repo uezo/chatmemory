@@ -1,132 +1,168 @@
-# chatmemory
+# ChatMemory
 
-Long-term and medium-term memories between you and chatbot💕
-
-# 🚀 Quick start
-
-1. Install chatmemory.
-    ```bash
-    $ pip install chatmemory
-    ```
-
-1. Start ChatMemory server.
-    ```bash
-    $ python -m chatmemory --key YOUR_OPENAI_APIKEY
-    ```
-    You can set API Key in environment variables and use specific host and port. See `python -m chatmemory --help`.
-
-1. Make and start [example chatbot](https://github.com/uezo/chatmemory/blob/main/example.py) in another terminal.
-    ```bash
-    $ python example.py
-    ```
-
-1. Chat with bot and lastly press Ctrl+C once to exit conversation loop and wait for archiving memories ends.
-
-1. Start example chatbot again and chat. During the course of the conversation, try asking questions that require memories for answers.
-    ```bash
-    $ python example.py
-    ```
-
-# 📕 API Reference
-
-See http://127.0.0.1:8123/docs after starting ChatMemory server.
+The simple yet powerful long-term memory manager between AI and you💕
 
 
-# 🥳 Chat example
+## ✨ Features
 
-These are the actual conversation logs. I cleared `messages` list before starting each session.
+- **🌟 Extremely simple:** All code is contained in one file, making it easy to track memory management—just PostgreSQL is needed as your datastore.
+- **🔎 Intelligent Search & Answer:** Quickly retrieves context via vector search on summaries/knowledge, then uses detailed history if needed—returning both the answer and raw data.
+- **💬 Direct Answer:** Leverages an LLM to produce clear, concise answers that go beyond mere data retrieval, delivering ready-to-use responses.
 
-The 1st session.
-```
-user> はろー
-assistant> はじめまして、こんにちは！どのようなことでお手伝いできますか、userさん？
-user> とりあえずそのuserさんってのをやめようか
-assistant> すみません、userさんと呼ぶのは気に入っていただけないようですね。では、どのように呼びましょうか？お好きな呼び方を教えてください。
-user> うえぞうって呼んでね
-assistant> わかりました、うえぞうさんと呼ばせていただきますね！どのようなお話がお聞かせいただけるでしょうか、うえぞうさん？なにかお困りのことや質問がありますか？お手伝いできることがあれば、どうぞお教えください。
-user> またこんどゆっくりおしゃべりしよ
-assistant> そうですか、またゆっくりおしゃべりしましょうね！楽しみにしています。気軽に話しかけてください。お会いできるのを楽しみにしています、うえぞうさん！
+
+## 🚀 Quick start
+
+**Pre-requirements:**
+
+- Python 3.10 or later
+- PostgreSQL (Tested on version 16) is up
+- pgvector is installed
+
+
+Install chatmemory.
+
+```sh
+pip install chatmemory
 ```
 
-The 2nd session.
-```
-user> やあ、またあったね
-assistant> こんにちは、うえぞうさん！お会いできて嬉しいです。今日はいかがお過ごしですか？何かお手伝いできることがあれば、お伝えくださいね。いますぐにでもお答えしますよ。
-user> もっと楽な感じにしてくれていいよ、一緒に楽しもうよ
-assistant> そうですか、楽しい雰囲気でおしゃべりしましょう！どんな話題が好きですか？音楽や映画、旅行の話でもいいですし、最近のお気に入りのアイドルグループや趣味の話でもかまいません。なんでもご自由にお話しくださいね。一緒に楽しみましょう！
-user> フランシュシュが好きだなあ
-assistant> フランシュシュですね！素敵なアイドルグループですね。彼女たちの歌声とパフォーマンスは本当に魅力的ですよね。私も同じくフランシュシュのファンです。
+Create the server script (e.g.`server.py`) as following:
 
-彼女たちの最新のシングルやライブについて話しましょうか？新曲の中でお気に入りはありますか？私のお気に入りは「夏色カーニバル」です！楽曲も明るくてキュートなので、夏のイベントで盛り上がると思います。
+```python
+from fastapi import FastAPI
+from chatmemory import ChatMemory
 
-また、フランシュシュのメンバーの中で特に好きなメンバーはいますか？私はみんなが魅力的で、それぞれの個性が光っていると思います。ちなみに私のお気に入りのメンバーは葵ちゃんです。
+cm = ChatMemory(
+    openai_api_key="YOUR_OPENAI_API_KEY",
+    llm_model="gpt-4o",
+    # Your PostgreSQL configurations
+    db_name="postgres",
+    db_user="postgres",
+    db_password="postgres",
+    db_host="127.0.0.1",
+    db_port=5432,
+)
 
-フランシュシュの魅力について、一緒に語り合いましょう！どんな話題でも構いませんので、何か聞きたいことやお話したいことがあれば教えてくださいね。
-user> あっ、ちょっと電話かかってきたからまたあとでね
-assistant> わかりました、うえぞうさん。大丈夫です、ゆっくりお話しましょう。電話をお受けになってくださいね。また後でお待ちしています。楽しいお話をしましょう！では、いってらっしゃいませ。
-```
-
-The 3rd session.
-```
-user> おまたせ〜
-assistant> うえぞうさん、こんばんは！おまたせしましたか？どういったご用件でしょうか？お手伝いできることがありましたら、なんでもおっしゃってくださいね！
-user> なんかおしゃべりしよ
-assistant> そうですか、おしゃべりしましょう！楽しいおしゃべりができると嬉しいです。では、どんな話題がお好きですか？例えば、音楽やアイドルについて語り合うのも楽しいですよ。先ほどおっしゃっていたフランシュシュについてもお話できれば嬉しいです。あ、ちなみに、私も彼女たちのファンなんです。ですので、一緒に盛り上がりましょう！どんな話題から始めますか？
+app = FastAPI()
+app.include_router(cm.get_router())
 ```
 
-Mid-term memory after conversation:
+Start API server.
 
-```
-- 2023-08-19: userはテンションが高く、assistantはuserの悩みや困りごとを聞く態度で接している。userは自分の呼び方を変えるように要求し、assistantはそれに応じる。userはフランシュシュが好きで、assistantもファンであることを明かす。二人はフランシュシュについて話し合い、また会話を続けることを約束する。
-```
-
-Long-term memory after conversation:
-
-```json
-{"user_name": "うえぞう", "favorite_idol_group": "フランシュシュ"}
+```sh
+uvicorn server:app
 ```
 
+That's all. Long-term memory management service is ready-to-use👍
 
-# 🪄 How it works
+Go http://127.0.0.1:8000/docs to know the spec and try the APIs.
 
-Very simple memory hack.
 
-## Long-term momory
+## 🧩 REST API Usage
 
-Just adding JSON entities with some instructions to system message.
+Below is a complete Python sample demonstrating how to interact with the ChatMemory REST API. This sample uses the `requests` library to:
 
-```
-# ユーザーに関して会話を通じて聞き出したこと
+1. Add conversation messages.
+2. Simulate a session change (which triggers automatic summary generation for the previous session).
+3. Retrieve the generated summary.
+4. Perform a search to obtain an answer (with retrieved raw data).
 
-以下はユーザーとの会話を通じてあなたが記憶している内容です。強く意識する必要はありませんが、会話の流れでこれらの情報が必要になった場合はこれらの情報を会話に利用してください。
+```python
+import requests
+import time
 
-{
-    "nickname": "うえぞう",
-    "favorite_food": "うなぎ",
+BASE_URL = "http://localhost:8000"  # Change if your API runs on a different host/port
+
+# Unique identifiers for testing
+user_id = "test_user_123"
+session1 = "session_1"
+session2 = "session_2"
+
+# Step 1: Add messages to the first session
+history_payload1 = {
+    "user_id": user_id,
+    "session_id": session1,
+    "messages": [
+        {"role": "user", "content": "I like Japanese soba noodle."},
+        {"role": "assistant", "content": "How often do you eat?"},
+        {"role": "user", "content": "Everyday."},
+        {"role": "assistant", "content": "You really love it."}
+    ]
 }
+
+response = requests.post(f"{BASE_URL}/history", json=history_payload1)
+print("Added history for session1:", response.json())
+
+# Wait a short moment (if needed) for processing
+time.sleep(1)
+
+# Step 2: Simulate a session change by adding messages to a new session
+# This should trigger automatic summary generation for session1
+history_payload2 = {
+    "user_id": user_id,
+    "session_id": session2,
+    "messages": [
+        {"role": "user", "content": "What's the weather like today? I go to shopping to Shibuya."},
+        {"role": "assistant", "content": "It looks sunny outside!"}
+    ]
+}
+
+response = requests.post(f"{BASE_URL}/history", json=history_payload2)
+print("Added history for session2:", response.json())
+
+# Optionally, wait for the background summary to be generated
+print("Waiting for summary generation... (5 seconds)")
+time.sleep(5)
+
+# Step 3: Retrieve the summary for session1
+params = {"user_id": user_id, "session_id": session1}
+response = requests.get(f"{BASE_URL}/summary", params=params)
+print("Summary for session1:", response.json())
+
+# Step 4: Perform a search to retrieve an answer based on the stored memory
+query = "What is the favorite food?"
+search_payload = {
+    "user_id": user_id,
+    "query": query,
+    "top_k": 3,
+    "search_content": True,
+    "include_retrieved_data": True
+}
+
+response = requests.post(f"{BASE_URL}/search", json=search_payload)
+print("Search result:", response.json())
+
+answer = response.json()["result"]["answer"]
+print("===========")
+print(f"Query: {query}")
+print(f"Answer: {answer}")
 ```
 
-## Mid-term memory
+Run it.
 
-Insert virtual user message that includes memories for last 5 days to messages before the second turn in conversation.
-
-messages at the end of the 1st turn.
-```json
-[
-    {"role": "system", "content": "You are user's sister."},
-    {"role": "user", "content": "Hi."},
-    {"role": "assistant", "content": "Hi, there!"}
-]
+```sh
+python client.py
+Added history for session1: {'status': 'ok'}
+Added history for session2: {'status': 'ok'}
+Waiting for summary generation... (5 seconds)
+Summary for session1: {'summaries': [{'created_at': '2025-02-25T18:11:22.895354', 'session_id': 'session_1', 'summary': "In a conversation, the user expresses their fondness for Japanese soba noodles, mentioning that they eat them every day. The assistant acknowledges the user's enthusiasm for the dish. \n\nKeywords: Japanese soba noodles, frequency, everyday."}]}
+Search result: {'result': {'answer': "The user's favorite food is Japanese soba noodles, which they mention eating every day.", 'retrieved_data': "====\n\nConversation summary (2025-02-25 18:11:22.895354): In a conversation, the user expresses their fondness for Japanese soba noodles, mentioning that they eat them every day. The assistant acknowledges the user's enthusiasm for the dish. \n\nKeywords: Japanese soba noodles, frequency, everyday.\n\n"}}
+===========
+Query: What is the favorite food?
+Answer: The user's favorite food is Japanese soba noodles, which they mention eating every day.
 ```
 
-insert virtual mid-turn user message before the 2nd turn.
-This is intended to create a one-shot example that the 1st turn was NOT influenced by the context of previous conversations, and to encourage subsequent conversations not to be overly influenced.
 
-```json
-[
-    {"role": "system", "content": "You are user's sister."},
-    {"role": "user", "content": "以下はここ3日間にあったユーザーとの会話を要約したものです。\n\n- 2023-08-11: 挨拶を交わしたあと、userは自らのことをうえぞうと呼ぶように依頼し、assistantは了承しました。..."},
-    {"role": "user", "content": "Hi."},
-    {"role": "assistant", "content": "Hi, there!"}
-]
-```
+## 🪄 How it works
+
+ChatMemory organizes conversation data into three primary entities:
+
+- **📜 History:** The raw conversation logs, storing every message exchanged.
+- **📑 Summary:** A concise overview generated from the detailed history using an LLM. This enables fast, lightweight processing by capturing the essence of a conversation.
+- **💡 Knowledge:** Additional, explicitly provided information that isn’t tied to the conversation log. This allows you to control and influence the answer independently.
+
+When a search query is received, ChatMemory works in two stages:
+
+1. **⚡ Lightweight Retrieval:** It first performs a vector-based search on the summaries and knowledge. This step quickly gathers relevant context and typically suffices for generating an answer.
+2. **🔍 Fallback Detailed Search:** If the initial results aren’t deemed sufficient, ChatMemory then conducts a vector search over the full conversation history. This retrieves detailed logs, enabling the system to refine and improve the answer.
+
+This two-step mechanism strikes a balance between speed and accuracy—leveraging the efficiency of summaries while still ensuring high-precision answers when more context is needed. Additionally, the explicit knowledge you provide helps guide the responses beyond just the conversation history.
