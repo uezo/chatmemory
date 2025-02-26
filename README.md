@@ -9,6 +9,27 @@ The simple yet powerful long-term memory manager between AI and you💕
 - **🔎 Intelligent Search & Answer:** Quickly retrieves context via vector search on summaries/knowledge, then uses detailed history if needed—returning both the answer and raw data.
 - **💬 Direct Answer:** Leverages an LLM to produce clear, concise answers that go beyond mere data retrieval, delivering ready-to-use responses.
 
+![ChatMemory Architecture Overview](resources/chatmemory.png)
+
+
+## 🐳 Quick start (Docker)
+
+```sh
+git clone https://github.com/uezo/chatmemory
+cd chatmemory/docker
+cp .env.sample .env
+```
+
+Set `OPENAI_API_KEY` to `.env`, then start the container.
+
+```sh
+docker compose up
+```
+
+Go http://127.0.0.1:8000/docs to know the spec and try the APIs.
+
+**NOTE:** On the first run, the `chatmemory-app` container may fail to start. This happens because the application server tries to access the database before it is fully initialized. Restarting the `chatmemory-app` container will resolve this issue.
+
 
 ## 🚀 Quick start
 

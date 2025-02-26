@@ -1,0 +1,40 @@
+services:
+  app:
+    container_name: chatmemory-app
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    environment:
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - LLM_MODEL=${LLM_MODEL}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+    ports:
+      - "${CHATMEMORY_PORT}:8000"
+    command: uvicorn run:app --host 0.0.0.0 --port 8000
+    depends_on:
+      - db
+
+  db:
+    container_name: chatmemory-db
+    build:
+      context: .
+      dockerfile: Dockerfile.db
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - chatmemory-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  chatmemory-postgres-data:
