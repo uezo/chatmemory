@@ -1,0 +1,9 @@
+FROM postgres:16
+
+RUN apt update \
+    && apt install postgresql-16-pgvector
+
+COPY init-db.sh /docker-entrypoint-initdb.d/init-db.sh
+
+RUN chmod +x /docker-entrypoint-initdb.d/init-db.sh \
+    && chown postgres:postgres /docker-entrypoint-initdb.d/init-db.sh
