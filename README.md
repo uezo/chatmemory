@@ -187,3 +187,24 @@ When a search query is received, ChatMemory works in two stages:
 2. **🔍 Fallback Detailed Search:** If the initial results aren’t deemed sufficient, ChatMemory then conducts a vector search over the full conversation history. This retrieves detailed logs, enabling the system to refine and improve the answer.
 
 This two-step mechanism strikes a balance between speed and accuracy—leveraging the efficiency of summaries while still ensuring high-precision answers when more context is needed. Additionally, the explicit knowledge you provide helps guide the responses beyond just the conversation history.
+
+
+## ❓ FAQ
+
+### Will there be support for models other than OpenAI?
+
+No! I want to keep things as simple as possible, and adding support for other models would make maintenance more challenging. However, if you override the two functions — `llm` and `embed` — you can adapt it to work with other LLMs, so feel free to give it a try! Also, you might consider using a solution like LiteLLM; I personally use it!
+
+https://github.com/BerriAI/litellm
+
+### How do I integrate this with my chatbot?
+
+Since fetching the entire memory every time could slow down responses and introduce unnecessary noise, it’s better to retrieve the memory only when needed for search and retrieval. Consider implementing the API call as a function call (or tool call) within your chatbot.
+
+### Is the data used in the second step solely from the conversation logs?
+
+Not at all — the response generation uses not only the detailed conversation logs but also the summary information obtained in the first step, along with any additional knowledge provided.
+
+### Is the Knowledge updated automatically?
+
+At the moment, it isn’t. Even during ongoing conversations, the Knowledge doesn’t grow on its own, so you’ll need to implement an update process through some operation. In the future, it would be great if important details from the conversation could automatically be "elevated" into Knowledge. If you manage to come up with a neat solution, feel free to submit a Pull Request!
