@@ -2,7 +2,7 @@ import asyncio
 import os
 import uuid
 import pytest
-from chatmemory import ChatMemory, HistoryMessage
+from chatmemory.chatmemory import ChatMemory, HistoryMessage
 
 
 DB_NAME = os.getenv("DB_NAME", "your_db")
@@ -47,6 +47,7 @@ def test_add_and_get_history(chat_memory):
     history_after = chat_memory.get_history(user_id=user_id, session_id=session_id)
     assert len(history_after) == 0
 
+# @pytest.mark.skip("s")
 def test_create_summary(chat_memory):
     user_id = str(uuid.uuid4())
     session_id = f"session_{uuid.uuid4()}"
@@ -57,12 +58,49 @@ def test_create_summary(chat_memory):
     chat_memory.add_history(user_id, session_id, messages)
     # Create summary (this calls the LLM and embeddings)
     asyncio.run(chat_memory.create_summary(user_id, session_id))
-    # Retrieve summaries and verify at least one exists
+    # Retrieve summaries and verify just one exists
     summaries = chat_memory.get_summaries(user_id=user_id, session_id=session_id)
-    assert len(summaries) >= 1
+    assert len(summaries) == 1
     # Cleanup: delete history and summaries
     chat_memory.delete_history(user_id=user_id, session_id=session_id)
     chat_memory.delete_summaries(user_id=user_id, session_id=session_id)
+
+
+def test_create_summaries(chat_memory):
+    user_id = str(uuid.uuid4())
+    session_id_1 = f"session_{uuid.uuid4()}"
+    messages = [
+        HistoryMessage(role="user", content="How is the weather today?", metadata={}),
+        HistoryMessage(role="assistant", content="It is sunny.", metadata={})
+    ]
+    chat_memory.add_history(user_id, session_id_1, messages)
+    session_id_2 = f"session_{uuid.uuid4()}"
+    messages = [
+        HistoryMessage(role="user", content="I'm very sleepy.", metadata={}),
+        HistoryMessage(role="assistant", content="Go to the bed.", metadata={})
+    ]
+    chat_memory.add_history(user_id, session_id_2, messages)
+    session_id_3 = f"session_{uuid.uuid4()}"
+    messages = [
+        HistoryMessage(role="user", content="Cat is better than dog.", metadata={}),
+        HistoryMessage(role="assistant", content="Exactly.", metadata={})
+    ]
+    chat_memory.add_history(user_id, session_id_3, messages)
+
+    # Create summary (this calls the LLM and embeddings)
+    asyncio.run(chat_memory.create_summary(user_id))
+    # Retrieve summaries and 2 exist
+    summaries = chat_memory.get_summaries(user_id=user_id)
+    assert len(summaries) == 2  # The latest one is skipped
+
+    # Cleanup: delete history and summaries
+    chat_memory.delete_history(user_id=user_id, session_id=session_id_1)
+    chat_memory.delete_history(user_id=user_id, session_id=session_id_2)
+    chat_memory.delete_history(user_id=user_id, session_id=session_id_3)
+    chat_memory.delete_summaries(user_id=user_id, session_id=session_id_1)
+    chat_memory.delete_summaries(user_id=user_id, session_id=session_id_2)
+    chat_memory.delete_summaries(user_id=user_id, session_id=session_id_3)
+
 
 def test_add_get_delete_knowledge(chat_memory):
     user_id = str(uuid.uuid4())

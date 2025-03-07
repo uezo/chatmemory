@@ -7,6 +7,7 @@ from typing import List, Dict, Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel
 import psycopg2
+from psycopg2 import pool
 import openai
 
 logger = logging.getLogger(__name__)
@@ -151,6 +152,7 @@ class ChatMemory:
             "host": db_host,
             "port": db_port,
         }
+        self.connection_pool = pool.SimpleConnectionPool(1, 10, **self.db_config)
         logger.info("Initializing database...")
         retry_counter = 2
         while True:
@@ -172,21 +174,30 @@ class ChatMemory:
         Automatically commits changes or rolls back on exception,
         and always closes the connection.
         """
-        conn = None
+        conn = self.connection_pool.getconn()
         try:
-            conn = psycopg2.connect(**self.db_config)
+            # Connection health check
+            try:
+                with conn.cursor() as test_cursor:
+                    test_cursor.execute("SELECT 1")
+            except (psycopg2.InterfaceError, psycopg2.OperationalError) as e:
+                logger.warning("Discarding zombie connection.")
+                self.connection_pool.putconn(conn, close=True)
+                conn = psycopg2.connect(**self.db_config)
             cursor = conn.cursor()
             yield cursor, conn
             conn.commit()
         except Exception as ex:
-            if conn:
-                conn.rollback()
+            conn.rollback()
             logger.error(f"Database error: {ex}")
             raise ChatMemoryError(ex)
         finally:
-            if conn:
-                cursor.close()
-                conn.close()
+            cursor.close()
+            if conn.closed:
+                self.connection_pool.putconn(conn, close=True)
+            else:
+                self.connection_pool.putconn(conn)
+
 
     def init_db(self):
         """Initialize necessary tables, extensions, and indexes."""
@@ -368,61 +379,85 @@ class ChatMemory:
         logger.info(f"Retrieved {len(session_ids)} session IDs for user {user_id}.")
         return session_ids
 
-    async def create_summary(self, user_id: str, session_id: str):
+    async def create_summary(self, user_id: str, session_id: str = None, overwrite: bool = False, max_count: int = 10):
         """
         Generate and store a summary (with embeddings) for a given session.
-        If a summary already exists, this method does nothing.
+        If a summary already exists and overwrite is False, this method does nothing.
         """
-        # Check if summary already exists
-        with self.get_db_cursor() as (cur, _):
-            cur.execute(
-                """
-                SELECT id FROM conversation_summaries
-                WHERE user_id = %s AND session_id = %s
-                """,
-                (user_id, session_id),
-            )
-            if cur.fetchone() is not None:
+        if session_id:
+            session_ids = [session_id]
+        else:
+            session_ids = self.get_session_ids(user_id)
+            session_ids = session_ids[(max_count + 1) * -1:-1]  # Skip the latest session
+
+        for session_id in session_ids:
+            is_summary_exists = False
+            # Check if summary already exists
+            with self.get_db_cursor() as (cur, _):
+                cur.execute(
+                    """
+                    SELECT id FROM conversation_summaries
+                    WHERE user_id = %s AND session_id = %s
+                    """,
+                    (user_id, session_id),
+                )
+                if cur.fetchone() is not None:
+                    is_summary_exists = True
+
+            if is_summary_exists and not overwrite:
                 logger.info(f"Summary already exists for user {user_id}, session {session_id}.")
                 return
 
-        # Retrieve conversation history for the session
-        with self.get_db_cursor() as (cur, _):
-            cur.execute(
-                """
-                SELECT role, content FROM conversation_history
-                WHERE user_id = %s AND session_id = %s
-                ORDER BY created_at ASC
-                """,
-                (user_id, session_id),
-            )
-            messages = cur.fetchall()
-        logger.info(f"Retrieved {len(messages)} messages for summary generation (user {user_id}, session {session_id}).")
+            # Retrieve conversation history for the session
+            with self.get_db_cursor() as (cur, _):
+                cur.execute(
+                    """
+                    SELECT role, content FROM conversation_history
+                    WHERE user_id = %s AND session_id = %s
+                    ORDER BY created_at ASC
+                    """,
+                    (user_id, session_id),
+                )
+                messages = cur.fetchall()
+            logger.info(f"Retrieved {len(messages)} messages for summary generation (user {user_id}, session {session_id}).")
 
-        conversation_text = "\n".join([f"{role}: {content}" for role, content in messages])
-        try:
-            summary = await self.llm(self.summarize_system_prompt, conversation_text)
-            logger.info(f"Generated summary for user {user_id}, session {session_id}.")
-        except ChatMemoryError:
-            logger.error("Summary generation failed.")
-            return
+            conversation_text = "\n".join([f"{role}: {content}" for role, content in messages])
+            try:
+                summary = await self.llm(self.summarize_system_prompt, conversation_text)
+                logger.info(f"Generated summary for user {user_id}, session {session_id}.")
+            except ChatMemoryError:
+                logger.error("Summary generation failed.")
+                return
 
-        try:
-            embedding_summary = await self.embed(summary)
-            embedding_content = await self.embed(conversation_text)
-        except ChatMemoryError:
-            logger.error("Embedding for summary or content failed.")
-            return
+            try:
+                embedding_summary = await self.embed(summary)
+                embedding_content = await self.embed(conversation_text)
+            except ChatMemoryError:
+                logger.error("Embedding for summary or content failed.")
+                return
 
-        with self.get_db_cursor() as (cur, _):
-            cur.execute(
-                """
-                INSERT INTO conversation_summaries (created_at, user_id, session_id, summary, embedding_summary, content_embedding)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                (datetime.datetime.utcnow(), user_id, session_id, summary, embedding_summary, embedding_content),
-            )
-        logger.info(f"Summary stored for user {user_id}, session {session_id}.")
+            with self.get_db_cursor() as (cur, _):
+                if is_summary_exists:
+                    cur.execute(
+                        """
+                        UPDATE conversation_summaries
+                        SET created_at = %s,
+                            summary = %s,
+                            embedding_summary = %s,
+                            content_embedding = %s
+                        WHERE user_id = %s AND session_id = %s
+                        """,
+                        (datetime.datetime.utcnow(), summary, embedding_summary, embedding_content, user_id, session_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO conversation_summaries (created_at, user_id, session_id, summary, embedding_summary, content_embedding)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (datetime.datetime.utcnow(), user_id, session_id, summary, embedding_summary, embedding_content),
+                    )
+            logger.info(f"Summary stored for user {user_id}, session {session_id}.")
 
     def get_summaries(self, user_id: Optional[str] = None, session_id: Optional[str] = None) -> List[SessionSummary]:
         """
@@ -734,13 +769,13 @@ class ChatMemory:
                 raise HTTPException(status_code=500, detail=str(ex))
 
         # ----- Summary Endpoints -----
-        @router.post("/summary/create", response_model=CreateSummaryResponse, summary="Create summary for a session", tags=["Summary"])
-        async def create_summary_endpoint(user_id: str, session_id: str):
+        @router.post("/summary/create", response_model=CreateSummaryResponse, summary="Create summary for a session or sessions of the user", tags=["Summary"])
+        async def create_summary_endpoint(user_id: str, session_id: str = None, overwrite: bool = False, max_count: int = 10):
             """
-            Generate and store a summary (and embeddings) for the specified session.
+            Generate and store a summary (and embeddings) for the specified session or sessions of the specified user.
             """
             try:
-                await self.create_summary(user_id, session_id)
+                await self.create_summary(user_id, session_id, overwrite, max_count)
                 return CreateSummaryResponse(status="summary created")
             except Exception as ex:
                 logger.error(f"Error in create_summary_endpoint: {ex}")
@@ -860,6 +895,6 @@ if __name__ == "__main__":
     )
 
     # Start server
-    app = FastAPI(title="ChatMemory", version="0.2.0")
+    app = FastAPI(title="ChatMemory", version="0.2.1")
     app.include_router(cm.get_router())
     uvicorn.run(app, host="0.0.0.0", port=int(CHATMEMORY_PORT))

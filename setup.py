@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="chatmemory",
-    version="0.2.1",
+    version="0.2.2",
     url="https://github.com/uezo/chatmemory",
     author="uezo",
     author_email="uezo@uezo.net",
