@@ -8,6 +8,7 @@ The simple yet powerful long-term memory manager between AI and you💕
 - **🌟 Extremely simple:** All code is contained in one file, making it easy to track memory management—just PostgreSQL is needed as your datastore.
 - **🔎 Intelligent Search & Answer:** Quickly retrieves context via vector search on summaries/knowledge, then uses detailed history if needed—returning both the answer and raw data.
 - **💬 Direct Answer:** Leverages an LLM to produce clear, concise answers that go beyond mere data retrieval, delivering ready-to-use responses.
+- **🔄 Omnichannel Support:** Store and retrieve conversation history across different channels (Slack, Discord, etc.) with the channel field, enabling unified context management.
 
 ![ChatMemory Architecture Overview](resources/chatmemory.png)
 
@@ -82,7 +83,7 @@ Go http://127.0.0.1:8000/docs to know the spec and try the APIs.
 
 Below is a complete Python sample demonstrating how to interact with the ChatMemory REST API. This sample uses the `requests` library to:
 
-1. Add conversation messages.
+1. Add conversation messages with channel information.
 2. Simulate a session change (which triggers automatic summary generation for the previous session).
 3. Retrieve the generated summary.
 4. Perform a search to obtain an answer (with retrieved raw data).
@@ -98,10 +99,11 @@ user_id = "test_user_123"
 session1 = "session_1"
 session2 = "session_2"
 
-# Step 1: Add messages to the first session
+# Step 1: Add messages to the first session with channel information
 history_payload1 = {
     "user_id": user_id,
     "session_id": session1,
+    "channel": "chatapp",  # Specify the channel (e.g., chatapp, discord, etc.)
     "messages": [
         {"role": "user", "content": "I like Japanese soba noodle."},
         {"role": "assistant", "content": "How often do you eat?"},
@@ -188,6 +190,56 @@ When a search query is received, ChatMemory works in two stages:
 
 This two-step mechanism strikes a balance between speed and accuracy—leveraging the efficiency of summaries while still ensuring high-precision answers when more context is needed. Additionally, the explicit knowledge you provide helps guide the responses beyond just the conversation history.
 
+
+## 🔄 Channel Support
+
+ChatMemory supports storing and retrieving conversation history across different channels (e.g., ChatApp, Discord, Slack, etc.). This enables a unified context management system that can handle omnichannel interactions.
+
+### Using the Channel Field
+
+You can specify a channel when adding conversation history:
+
+```python
+# Add messages with channel information
+history_payload = {
+    "user_id": "user123",
+    "session_id": "session456",
+    "channel": "chatapp",  # Specify the channel
+    "messages": [
+        {"role": "user", "content": "Hello from ChatApp"},
+        {"role": "assistant", "content": "Hi there from ChatApp"}
+    ]
+}
+response = requests.post(f"{BASE_URL}/history", json=history_payload)
+```
+
+### Filtering by Channel
+
+You can retrieve conversation history filtered by channel:
+
+```python
+# Get history for a specific channel
+params = {
+    "user_id": "user123",
+    "session_id": "session456",
+    "channel": "chatapp"  # Filter by channel
+}
+response = requests.get(f"{BASE_URL}/history", params=params)
+```
+
+### Deleting by Channel
+
+You can delete conversation history for a specific channel:
+
+```python
+# Delete history for a specific channel
+params = {
+    "user_id": "user123",
+    "session_id": "session456",
+    "channel": "chatapp"  # Delete only messages from this channel
+}
+response = requests.delete(f"{BASE_URL}/history", params=params)
+```
 
 ## ❓ FAQ
 

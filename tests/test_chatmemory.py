@@ -47,6 +47,54 @@ def test_add_and_get_history(chat_memory):
     history_after = chat_memory.get_history(user_id=user_id, session_id=session_id)
     assert len(history_after) == 0
 
+def test_channel_field_functionality(chat_memory):
+    """Test the channel field functionality for storing and retrieving messages."""
+    # Generate unique user_id and session_id for isolation
+    user_id = str(uuid.uuid4())
+    session_id = f"session_{uuid.uuid4()}"
+    
+    # Create messages for different channels
+    chatapp_messages = [
+        HistoryMessage(role="user", content="Hello from ChatApp", metadata={}),
+        HistoryMessage(role="assistant", content="Hi there from ChatApp!", metadata={}),
+    ]
+    
+    discord_messages = [
+        HistoryMessage(role="user", content="Hello from Discord", metadata={}),
+        HistoryMessage(role="assistant", content="Hi there from Discord!", metadata={}),
+    ]
+    
+    # Add history for both channels
+    chat_memory.add_history(user_id, session_id, chatapp_messages, channel="chatapp")
+    chat_memory.add_history(user_id, session_id, discord_messages, channel="discord")
+    
+    # Retrieve all history for the session
+    all_history = chat_memory.get_history(user_id=user_id, session_id=session_id)
+    assert len(all_history) == 4  # All messages from both channels
+    
+    # Retrieve history filtered by chatapp channel
+    chatapp_history = chat_memory.get_history(user_id=user_id, session_id=session_id, channel="chatapp")
+    assert len(chatapp_history) == 2
+    assert all(msg.channel == "chatapp" for msg in chatapp_history)
+    
+    # Retrieve history filtered by discord channel
+    discord_history = chat_memory.get_history(user_id=user_id, session_id=session_id, channel="discord")
+    assert len(discord_history) == 2
+    assert all(msg.channel == "discord" for msg in discord_history)
+    
+    # Delete only chatapp channel messages
+    chat_memory.delete_history(user_id=user_id, session_id=session_id, channel="chatapp")
+    
+    # Verify only chatapp messages were deleted
+    remaining_history = chat_memory.get_history(user_id=user_id, session_id=session_id)
+    assert len(remaining_history) == 2  # Only discord messages should remain
+    assert all(msg.channel == "discord" for msg in remaining_history)
+    
+    # Clean up: delete all remaining history
+    chat_memory.delete_history(user_id=user_id, session_id=session_id)
+    history_after = chat_memory.get_history(user_id=user_id, session_id=session_id)
+    assert len(history_after) == 0
+
 # @pytest.mark.skip("s")
 def test_create_summary(chat_memory):
     user_id = str(uuid.uuid4())
