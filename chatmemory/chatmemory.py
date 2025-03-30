@@ -26,6 +26,13 @@ class HistoryMessage(BaseModel):
 class HistoryMessageWithId(HistoryMessage):
     user_id: Optional[str] = None
     session_id: Optional[str] = None
+    channel: Optional[str] = None
+
+class SessionInfo(BaseModel):
+    created_at: datetime.datetime
+    user_id: str
+    session_id: str
+    channel: Optional[str] = None
 
 class SessionSummary(BaseModel):
     created_at: datetime.datetime
@@ -53,6 +60,7 @@ class AddHistoryRequest(BaseModel):
     user_id: str
     session_id: str
     messages: List[HistoryMessage]
+    channel: Optional[str] = None
 
 class AddHistoryResponse(BaseModel):
     status: str
@@ -62,6 +70,9 @@ class GetHistoryResponse(BaseModel):
 
 class GetSessionIdsResponse(BaseModel):
     session_ids: List[str]
+
+class GetSessionsResponse(BaseModel):
+    sessions: List[SessionInfo]
 
 class CreateSummaryResponse(BaseModel):
     status: str
@@ -212,12 +223,28 @@ class ChatMemory:
                     session_id TEXT NOT NULL,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    metadata JSONB
+                    metadata JSONB,
+                    channel TEXT
                 );
+                """
+            )
+            # Add channel column to existing table if it doesn't exist
+            cur.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'conversation_history' AND column_name = 'channel'
+                    ) THEN
+                        ALTER TABLE conversation_history ADD COLUMN channel TEXT;
+                    END IF;
+                END $$;
                 """
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_history_user_id ON conversation_history(user_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_history_session_id ON conversation_history(session_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_history_channel ON conversation_history(channel);")
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversation_summaries (
@@ -273,7 +300,7 @@ class ChatMemory:
             logger.error(f"Error in embedding: {ex}")
             raise ChatMemoryError(ex)
 
-    def add_history(self, user_id: str, session_id: str, messages: List[HistoryMessage]):
+    def add_history(self, user_id: str, session_id: str, messages: List[HistoryMessage], channel: Optional[str] = None):
         """Insert multiple conversation history records for a given user and session."""
         now = datetime.datetime.utcnow()
         with self.get_db_cursor() as (cur, _):
@@ -281,54 +308,44 @@ class ChatMemory:
                 created_at = msg.created_at or now
                 cur.execute(
                     """
-                    INSERT INTO conversation_history (created_at, user_id, session_id, role, content, metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    INSERT INTO conversation_history (created_at, user_id, session_id, role, content, metadata, channel)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (created_at, user_id, session_id, msg.role, msg.content, json.dumps(msg.metadata)),
+                    (created_at, user_id, session_id, msg.role, msg.content, json.dumps(msg.metadata), channel),
                 )
-        logger.info(f"Inserted {len(messages)} messages for user {user_id}, session {session_id}.")
+        log_message = f"Inserted {len(messages)} messages for user {user_id}, session {session_id}"
+        if channel:
+            log_message += f", channel {channel}"
+        logger.info(log_message + ".")
 
-    def get_history(self, user_id: Optional[str] = None, session_id: Optional[str] = None) -> List[HistoryMessageWithId]:
+    def get_history(self, user_id: Optional[str] = None, session_id: Optional[str] = None, channel: Optional[str] = None) -> List[HistoryMessageWithId]:
         """
-        Retrieve conversation history for a given user or session (up to 1000 records).
+        Retrieve conversation history for a given user, session, or channel (up to 1000 records).
         At least one of user_id or session_id must be provided.
         """
         if not user_id and not session_id:
             raise ValueError("Either user_id or session_id must be specified.")
+        
         with self.get_db_cursor() as (cur, _):
-            if user_id and session_id:
-                cur.execute(
-                    """
-                    SELECT created_at, user_id, session_id, role, content, metadata
-                    FROM conversation_history
-                    WHERE user_id = %s AND session_id = %s
-                    ORDER BY created_at ASC
-                    LIMIT 1000
-                    """,
-                    (user_id, session_id),
-                )
-            elif session_id:
-                cur.execute(
-                    """
-                    SELECT created_at, user_id, session_id, role, content, metadata
-                    FROM conversation_history
-                    WHERE session_id = %s
-                    ORDER BY created_at ASC
-                    LIMIT 1000
-                    """,
-                    (session_id,),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT created_at, user_id, session_id, role, content, metadata
-                    FROM conversation_history
-                    WHERE user_id = %s
-                    ORDER BY created_at ASC
-                    LIMIT 1000
-                    """,
-                    (user_id,),
-                )
+            query_parts = ["SELECT created_at, user_id, session_id, role, content, metadata, channel FROM conversation_history WHERE"]
+            params = []
+            
+            conditions = []
+            if user_id:
+                conditions.append("user_id = %s")
+                params.append(user_id)
+            if session_id:
+                conditions.append("session_id = %s")
+                params.append(session_id)
+            if channel:
+                conditions.append("channel = %s")
+                params.append(channel)
+                
+            query_parts.append(" AND ".join(conditions))
+            query_parts.append("ORDER BY created_at ASC LIMIT 1000")
+            
+            query = " ".join(query_parts)
+            cur.execute(query, tuple(params))
             rows = cur.fetchall()
         logger.info(f"Retrieved {len(rows)} history records.")
         return [HistoryMessageWithId(
@@ -337,31 +354,45 @@ class ChatMemory:
             session_id=row[2],
             role=row[3],
             content=row[4],
-            metadata=row[5]
+            metadata=row[5],
+            channel=row[6]
         ) for row in rows]
 
-    def delete_history(self, user_id: Optional[str] = None, session_id: Optional[str] = None):
-        """Delete conversation history. If both user_id and session_id are provided, delete records matching both."""
+    def delete_history(self, user_id: Optional[str] = None, session_id: Optional[str] = None, channel: Optional[str] = None):
+        """
+        Delete conversation history based on provided filters.
+        If multiple filters are provided, records matching all filters will be deleted.
+        """
         with self.get_db_cursor() as (cur, _):
-            if user_id and session_id:
-                cur.execute(
-                    "DELETE FROM conversation_history WHERE user_id = %s AND session_id = %s",
-                    (user_id, session_id),
-                )
-                logger.info(f"Deleted history for user {user_id} and session {session_id}.")
-            elif session_id:
-                cur.execute(
-                    "DELETE FROM conversation_history WHERE session_id = %s", (session_id,)
-                )
-                logger.info(f"Deleted history for session {session_id}.")
-            elif user_id:
-                cur.execute(
-                    "DELETE FROM conversation_history WHERE user_id = %s", (user_id,)
-                )
-                logger.info(f"Deleted history for user {user_id}.")
-            else:
-                cur.execute("DELETE FROM conversation_history")
-                logger.info("Deleted all conversation history.")
+            query_parts = ["DELETE FROM conversation_history"]
+            params = []
+            
+            conditions = []
+            if user_id:
+                conditions.append("user_id = %s")
+                params.append(user_id)
+            if session_id:
+                conditions.append("session_id = %s")
+                params.append(session_id)
+            if channel:
+                conditions.append("channel = %s")
+                params.append(channel)
+                
+            if conditions:
+                query_parts.append("WHERE " + " AND ".join(conditions))
+                
+            query = " ".join(query_parts)
+            cur.execute(query, tuple(params))
+            
+            # Log the deletion
+            log_message = "Deleted history"
+            if user_id:
+                log_message += f" for user {user_id}"
+            if session_id:
+                log_message += f" in session {session_id}"
+            if channel:
+                log_message += f" from channel {channel}"
+            logger.info(log_message + ".")
 
     def get_session_ids(self, user_id: str) -> List[str]:
         """Retrieve all distinct session IDs for the specified user."""
@@ -378,6 +409,49 @@ class ChatMemory:
             session_ids = [row[0] for row in cur.fetchall()]
         logger.info(f"Retrieved {len(session_ids)} session IDs for user {user_id}.")
         return session_ids
+
+    def get_sessions(self, user_id: str, within_seconds: int = 3600, limit: int = 5) -> List[SessionInfo]:
+        """
+        Retrieve the latest created_at and channel for each session of the specified user.
+        Only sessions with a latest created_at within the last `within_seconds` seconds are considered.
+        The results are ordered by created_at in descending order (newest first).
+        A maximum of `limit` sessions are retrieved (default is 5).
+        The retrieved information is returned as a list of SessionInfo objects.
+        """
+        with self.get_db_cursor() as (cur, _):
+            cur.execute(
+                """
+                WITH latest_sessions AS (
+                    SELECT
+                        session_id,
+                        created_at,
+                        channel,
+                        ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at DESC) AS rn
+                    FROM conversation_history
+                    WHERE user_id = %s
+                )
+                SELECT session_id, created_at, channel
+                FROM latest_sessions
+                WHERE rn = 1
+                AND created_at >= NOW() - INTERVAL '1 second' * %s
+                ORDER BY created_at DESC
+                LIMIT %s;
+                """,
+                (user_id, within_seconds, limit)
+            )
+            results = cur.fetchall()
+        
+        sessions = [
+            SessionInfo(
+                session_id=row[0],
+                created_at=row[1],
+                channel=row[2],
+                user_id=user_id
+            )
+            for row in results
+        ]
+        logger.info(f"Retrieved {len(sessions)} session info for user {user_id}.")
+        return sessions
 
     async def create_summary(self, user_id: str, session_id: str = None, overwrite: bool = False, max_count: int = 10):
         """
@@ -629,7 +703,7 @@ class ChatMemory:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT created_at, role, content
+                    SELECT created_at, role, content, channel
                     FROM conversation_history
                     WHERE session_id = %s
                     ORDER BY created_at ASC
@@ -638,7 +712,7 @@ class ChatMemory:
                     (session_id,),
                 )
                 rows = cur.fetchall()
-                session_messages[session_id] = [HistoryMessage(created_at=r[0], role=r[1], content=r[2]) for r in rows]
+                session_messages[session_id] = [HistoryMessage(created_at=r[0], role=r[1], content=r[2], channel=r[3]) for r in rows]
         return session_messages
 
     async def search(self, user_id: str, query: str, top_k: int = 5, search_content: bool = False, include_retrieved_data: bool = False) -> SearchResult:
@@ -720,7 +794,7 @@ class ChatMemory:
                     row = cur.fetchone()
                     previous_session = row[0] if row else None
 
-                self.add_history(user_id=request.user_id, session_id=request.session_id, messages=request.messages)
+                self.add_history(user_id=request.user_id, session_id=request.session_id, messages=request.messages, channel=request.channel)
                 # If a session switch is detected, schedule summary generation for the previous session
                 if previous_session and previous_session != request.session_id:
                     background_tasks.add_task(self.create_summary, request.user_id, previous_session)
@@ -730,12 +804,17 @@ class ChatMemory:
                 raise HTTPException(status_code=500, detail=str(ex))
 
         @router.get("/history", response_model=GetHistoryResponse, summary="Get conversation history", tags=["History"])
-        def get_history_endpoint(user_id: Optional[str] = Query(None), session_id: Optional[str] = Query(None)):
+        def get_history_endpoint(
+            user_id: Optional[str] = Query(None), 
+            session_id: Optional[str] = Query(None),
+            channel: Optional[str] = Query(None)
+        ):
             """
-            Retrieve conversation history for a specified user or session (max 1000 records).
+            Retrieve conversation history for a specified user, session, or channel (max 1000 records).
+            At least one of user_id or session_id must be provided.
             """
             try:
-                messages = self.get_history(user_id=user_id, session_id=session_id)
+                messages = self.get_history(user_id=user_id, session_id=session_id, channel=channel)
                 return GetHistoryResponse(messages=messages)
             except ValueError as ve:
                 logger.error(f"Get history error: {ve}")
@@ -745,25 +824,42 @@ class ChatMemory:
                 raise HTTPException(status_code=500, detail=str(ex))
 
         @router.delete("/history", response_model=DeleteResponse, summary="Delete conversation history", tags=["History"])
-        def delete_history_endpoint(user_id: Optional[str] = Query(None), session_id: Optional[str] = Query(None)):
+        def delete_history_endpoint(
+            user_id: Optional[str] = Query(None), 
+            session_id: Optional[str] = Query(None),
+            channel: Optional[str] = Query(None)
+        ):
             """
-            Delete conversation history for a specified user, session, or all history if not specified.
+            Delete conversation history for a specified user, session, channel, or all history if not specified.
+            If multiple parameters are provided, records matching all criteria will be deleted.
             """
             try:
-                self.delete_history(user_id=user_id, session_id=session_id)
+                self.delete_history(user_id=user_id, session_id=session_id, channel=channel)
                 return DeleteResponse(status="history deleted")
             except Exception as ex:
                 logger.error(f"Error in delete_history_endpoint: {ex}")
                 raise HTTPException(status_code=500, detail=str(ex))
 
-        @router.get("/history/session_ids", response_model=GetSessionIdsResponse, summary="Get user sessions", tags=["History"])
-        def get_sessions_endpoint(user_id: str = Query(...)):
+        @router.get("/history/session_ids", response_model=GetSessionIdsResponse, summary="Get user session ids", tags=["History"])
+        def get_session_ids_endpoint(user_id: str = Query(...)):
             """
             Retrieve all distinct session IDs for the specified user.
             """
             try:
                 session_ids = self.get_session_ids(user_id)
                 return GetSessionIdsResponse(session_ids=session_ids)
+            except Exception as ex:
+                logger.error(f"Error in get_session_ids_endpoint: {ex}")
+                raise HTTPException(status_code=500, detail=str(ex))
+
+        @router.get("/history/sessions", response_model=GetSessionsResponse, summary="Get user sessions", tags=["History"])
+        def get_sessions_endpoint(user_id: str = Query(...), within_seconds: int = 3600, limit: int = 5):
+            """
+            Retrieve the latest created_at and channel for each session of the specified user.
+            """
+            try:
+                sessions = self.get_sessions(user_id, within_seconds, limit)
+                return GetSessionsResponse(sessions=sessions)
             except Exception as ex:
                 logger.error(f"Error in get_sessions_endpoint: {ex}")
                 raise HTTPException(status_code=500, detail=str(ex))
