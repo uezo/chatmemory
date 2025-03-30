@@ -28,6 +28,12 @@ class HistoryMessageWithId(HistoryMessage):
     session_id: Optional[str] = None
     channel: Optional[str] = None
 
+class SessionInfo(BaseModel):
+    created_at: datetime.datetime
+    user_id: str
+    session_id: str
+    channel: Optional[str] = None
+
 class SessionSummary(BaseModel):
     created_at: datetime.datetime
     session_id: str
@@ -64,6 +70,9 @@ class GetHistoryResponse(BaseModel):
 
 class GetSessionIdsResponse(BaseModel):
     session_ids: List[str]
+
+class GetSessionsResponse(BaseModel):
+    sessions: List[SessionInfo]
 
 class CreateSummaryResponse(BaseModel):
     status: str
@@ -400,6 +409,49 @@ class ChatMemory:
             session_ids = [row[0] for row in cur.fetchall()]
         logger.info(f"Retrieved {len(session_ids)} session IDs for user {user_id}.")
         return session_ids
+
+    def get_sessions(self, user_id: str, within_seconds: int = 3600, limit: int = 5) -> List[SessionInfo]:
+        """
+        Retrieve the latest created_at and channel for each session of the specified user.
+        Only sessions with a latest created_at within the last `within_seconds` seconds are considered.
+        The results are ordered by created_at in descending order (newest first).
+        A maximum of `limit` sessions are retrieved (default is 5).
+        The retrieved information is returned as a list of SessionInfo objects.
+        """
+        with self.get_db_cursor() as (cur, _):
+            cur.execute(
+                """
+                WITH latest_sessions AS (
+                    SELECT
+                        session_id,
+                        created_at,
+                        channel,
+                        ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at DESC) AS rn
+                    FROM conversation_history
+                    WHERE user_id = %s
+                )
+                SELECT session_id, created_at, channel
+                FROM latest_sessions
+                WHERE rn = 1
+                AND created_at >= NOW() - INTERVAL '1 second' * %s
+                ORDER BY created_at DESC
+                LIMIT %s;
+                """,
+                (user_id, within_seconds, limit)
+            )
+            results = cur.fetchall()
+        
+        sessions = [
+            SessionInfo(
+                session_id=row[0],
+                created_at=row[1],
+                channel=row[2],
+                user_id=user_id
+            )
+            for row in results
+        ]
+        logger.info(f"Retrieved {len(sessions)} session info for user {user_id}.")
+        return sessions
 
     async def create_summary(self, user_id: str, session_id: str = None, overwrite: bool = False, max_count: int = 10):
         """
@@ -788,14 +840,26 @@ class ChatMemory:
                 logger.error(f"Error in delete_history_endpoint: {ex}")
                 raise HTTPException(status_code=500, detail=str(ex))
 
-        @router.get("/history/session_ids", response_model=GetSessionIdsResponse, summary="Get user sessions", tags=["History"])
-        def get_sessions_endpoint(user_id: str = Query(...)):
+        @router.get("/history/session_ids", response_model=GetSessionIdsResponse, summary="Get user session ids", tags=["History"])
+        def get_session_ids_endpoint(user_id: str = Query(...)):
             """
             Retrieve all distinct session IDs for the specified user.
             """
             try:
                 session_ids = self.get_session_ids(user_id)
                 return GetSessionIdsResponse(session_ids=session_ids)
+            except Exception as ex:
+                logger.error(f"Error in get_session_ids_endpoint: {ex}")
+                raise HTTPException(status_code=500, detail=str(ex))
+
+        @router.get("/history/sessions", response_model=GetSessionsResponse, summary="Get user sessions", tags=["History"])
+        def get_sessions_endpoint(user_id: str = Query(...), within_seconds: int = 3600, limit: int = 5):
+            """
+            Retrieve the latest created_at and channel for each session of the specified user.
+            """
+            try:
+                sessions = self.get_sessions(user_id, within_seconds, limit)
+                return GetSessionsResponse(sessions=sessions)
             except Exception as ex:
                 logger.error(f"Error in get_sessions_endpoint: {ex}")
                 raise HTTPException(status_code=500, detail=str(ex))

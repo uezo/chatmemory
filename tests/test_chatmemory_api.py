@@ -143,6 +143,58 @@ def test_channel_field_api():
     assert response.status_code == 200
     assert response.json()["status"] == "history deleted"
 
+def test_get_sessions_endpoint():
+    """Test the REST API endpoint for retrieving session details with time and limit filters."""
+    # Create a unique user_id and multiple sessions.
+    user_id = str(uuid.uuid4())
+    session_ids = [f"session_{uuid.uuid4()}" for _ in range(7)]
+    
+    # Add history for each session via the API.
+    for session_id in session_ids:
+        payload = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "messages": [
+                {"role": "user", "content": "Session test message", "metadata": {}},
+                {"role": "assistant", "content": "Test response", "metadata": {}}
+            ]
+        }
+        response = client.post("/history", json=payload)
+        assert response.status_code == 200
+    
+    # Update one session to have an old created_at (e.g., 2 hours ago)
+    old_session_id = session_ids[0]
+    with chat_memory.get_db_cursor() as (cur, conn):
+        cur.execute(
+            "UPDATE conversation_history SET created_at = NOW() - INTERVAL '2 hours' WHERE session_id = %s",
+            (old_session_id,)
+        )
+        conn.commit()
+    
+    # Test within_seconds filter: using within_seconds=3600 (1 hour) should exclude the old session.
+    params = {"user_id": user_id, "within_seconds": 3600, "limit": 10}
+    response = client.get("/history/sessions", params=params)
+    assert response.status_code == 200
+    data = response.json()
+    assert "sessions" in data
+    sessions = data["sessions"]
+    # The old session is filtered out.
+    assert old_session_id not in {s["session_id"] for s in sessions}
+    assert len(sessions) == len(session_ids) - 1
+    
+    # Test limit filter: using within_seconds=7200 (2 hours) and limit=5 should return only 5 sessions.
+    params = {"user_id": user_id, "within_seconds": 7200, "limit": 5}
+    response = client.get("/history/sessions", params=params)
+    assert response.status_code == 200
+    data = response.json()
+    sessions = data["sessions"]
+    assert len(sessions) == 5
+    
+    # Cleanup: Delete history for all created sessions.
+    for session_id in session_ids:
+        response = client.delete("/history", params={"user_id": user_id, "session_id": session_id})
+        assert response.status_code == 200
+
 def test_summary_endpoints(test_user, test_session):
     # First, add some conversation history so a summary can be generated.
     payload = {

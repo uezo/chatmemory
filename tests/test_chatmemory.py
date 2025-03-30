@@ -95,7 +95,73 @@ def test_channel_field_functionality(chat_memory):
     history_after = chat_memory.get_history(user_id=user_id, session_id=session_id)
     assert len(history_after) == 0
 
-# @pytest.mark.skip("s")
+def test_get_sessions(chat_memory):
+    """Test retrieving session details (SessionInfo) with the latest created_at and channel information."""
+    user_id = str(uuid.uuid4())
+    # Create multiple sessions with distinct session IDs.
+    session_ids = [f"session_{uuid.uuid4()}" for _ in range(3)]
+
+    # Add history for each session.
+    for session_id in session_ids:
+        messages = [
+            HistoryMessage(role="user", content="Session test message", metadata={}),
+            HistoryMessage(role="assistant", content="Test response", metadata={})
+        ]
+        chat_memory.add_history(user_id, session_id, messages)
+
+    # Retrieve session details using the new method.
+    sessions = chat_memory.get_sessions(user_id=user_id, within_seconds=3600, limit=5)
+
+    # Verify that a session detail is returned for each created session.
+    assert len(sessions) == len(session_ids)
+
+    # Check that each SessionInfo has the correct user_id and a session_id from the created sessions.
+    retrieved_session_ids = {info.session_id for info in sessions}
+    assert set(session_ids) == retrieved_session_ids
+
+    # Cleanup: Delete history for all created sessions.
+    for session_id in session_ids:
+        chat_memory.delete_history(user_id=user_id, session_id=session_id)
+
+def test_get_sessions_with_filters(chat_memory):
+    """Test retrieving session details (SessionInfo) verifying within_seconds and limit filters."""
+    user_id = str(uuid.uuid4())
+    # Create multiple sessions (7 sessions)
+    session_ids = [f"session_{uuid.uuid4()}" for _ in range(7)]
+
+    # Add history for each session.
+    for session_id in session_ids:
+        messages = [
+            HistoryMessage(role="user", content="Session test message", metadata={}),
+            HistoryMessage(role="assistant", content="Test response", metadata={})
+        ]
+        chat_memory.add_history(user_id, session_id, messages)
+
+    # Update one session to have an old created_at (e.g., 2 hours ago) to test the within_seconds filter.
+    old_session_id = session_ids[0]
+    with chat_memory.get_db_cursor() as (cur, conn):
+        cur.execute(
+            "UPDATE conversation_history SET created_at = NOW() - INTERVAL '2 hours' WHERE session_id = %s",
+            (old_session_id,)
+        )
+        conn.commit()
+
+    # Verify within_seconds filter:
+    # Using within_seconds=3600 (1 hour) should exclude the old session.
+    sessions_within = chat_memory.get_sessions(user_id=user_id, within_seconds=3600, limit=10)
+    retrieved_ids_within = {info.session_id for info in sessions_within}
+    assert old_session_id not in retrieved_ids_within
+    assert len(sessions_within) == len(session_ids) - 1  # Old session is excluded.
+
+    # Verify limit filter:
+    # Using a larger within_seconds to include all sessions but setting limit=5 should return only 5 sessions.
+    sessions_limited = chat_memory.get_sessions(user_id=user_id, within_seconds=7200, limit=5)
+    assert len(sessions_limited) == 5
+
+    # Cleanup: Delete history for all created sessions.
+    for session_id in session_ids:
+        chat_memory.delete_history(user_id=user_id, session_id=session_id)
+
 def test_create_summary(chat_memory):
     user_id = str(uuid.uuid4())
     session_id = f"session_{uuid.uuid4()}"
@@ -112,7 +178,6 @@ def test_create_summary(chat_memory):
     # Cleanup: delete history and summaries
     chat_memory.delete_history(user_id=user_id, session_id=session_id)
     chat_memory.delete_summaries(user_id=user_id, session_id=session_id)
-
 
 def test_create_summaries(chat_memory):
     user_id = str(uuid.uuid4())
@@ -148,7 +213,6 @@ def test_create_summaries(chat_memory):
     chat_memory.delete_summaries(user_id=user_id, session_id=session_id_1)
     chat_memory.delete_summaries(user_id=user_id, session_id=session_id_2)
     chat_memory.delete_summaries(user_id=user_id, session_id=session_id_3)
-
 
 def test_add_get_delete_knowledge(chat_memory):
     user_id = str(uuid.uuid4())
