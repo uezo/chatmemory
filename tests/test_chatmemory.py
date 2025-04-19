@@ -42,6 +42,17 @@ def test_add_and_get_history(chat_memory):
     # Retrieve history and verify
     history = chat_memory.get_history(user_id=user_id, session_id=session_id)
     assert len(history) == len(messages)
+    # Test within_seconds: add a new message, sleep, then check filtering
+    import time
+    msg_late = [HistoryMessage(role="user", content="Late message", metadata={})]
+    chat_memory.add_history(user_id, session_id, msg_late)
+    time.sleep(2)
+    # Only the last message should be within 1 second (should be 0)
+    history_recent = chat_memory.get_history(user_id=user_id, session_id=session_id, within_seconds=1)
+    assert len(history_recent) == 0
+    # All messages should be returned with within_seconds=0 (unlimited)
+    history_all = chat_memory.get_history(user_id=user_id, session_id=session_id, within_seconds=0)
+    assert len(history_all) == len(messages) + 1
     # Cleanup: delete history
     chat_memory.delete_history(user_id=user_id, session_id=session_id)
     history_after = chat_memory.get_history(user_id=user_id, session_id=session_id)

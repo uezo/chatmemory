@@ -318,18 +318,25 @@ class ChatMemory:
             log_message += f", channel {channel}"
         logger.info(log_message + ".")
 
-    def get_history(self, user_id: Optional[str] = None, session_id: Optional[str] = None, channel: Optional[str] = None) -> List[HistoryMessageWithId]:
+    def get_history(
+        self,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        within_seconds: int = 3600
+    ) -> List[HistoryMessageWithId]:
         """
         Retrieve conversation history for a given user, session, or channel (up to 1000 records).
         At least one of user_id or session_id must be provided.
+        Optionally filter by records created within the last `within_seconds` seconds (default: 3600, 0 means unlimited).
         """
         if not user_id and not session_id:
             raise ValueError("Either user_id or session_id must be specified.")
-        
+
         with self.get_db_cursor() as (cur, _):
             query_parts = ["SELECT created_at, user_id, session_id, role, content, metadata, channel FROM conversation_history WHERE"]
             params = []
-            
+
             conditions = []
             if user_id:
                 conditions.append("user_id = %s")
@@ -340,10 +347,13 @@ class ChatMemory:
             if channel:
                 conditions.append("channel = %s")
                 params.append(channel)
-                
+            if within_seconds and within_seconds > 0:
+                conditions.append("created_at >= NOW() - INTERVAL '1 second' * %s")
+                params.append(within_seconds)
+
             query_parts.append(" AND ".join(conditions))
             query_parts.append("ORDER BY created_at ASC LIMIT 1000")
-            
+
             query = " ".join(query_parts)
             cur.execute(query, tuple(params))
             rows = cur.fetchall()
@@ -807,14 +817,16 @@ class ChatMemory:
         def get_history_endpoint(
             user_id: Optional[str] = Query(None), 
             session_id: Optional[str] = Query(None),
-            channel: Optional[str] = Query(None)
+            channel: Optional[str] = Query(None),
+            within_seconds: int = Query(3600, description="Retrieve messages within the last N seconds. 0 means unlimited.")
         ):
             """
             Retrieve conversation history for a specified user, session, or channel (max 1000 records).
             At least one of user_id or session_id must be provided.
+            Optionally filter by records created within the last `within_seconds` seconds (default: 3600, 0 means unlimited).
             """
             try:
-                messages = self.get_history(user_id=user_id, session_id=session_id, channel=channel)
+                messages = self.get_history(user_id=user_id, session_id=session_id, channel=channel, within_seconds=within_seconds)
                 return GetHistoryResponse(messages=messages)
             except ValueError as ve:
                 logger.error(f"Get history error: {ve}")
