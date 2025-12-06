@@ -14,11 +14,14 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
       - LLM_MODEL=${LLM_MODEL}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION}
     ports:
       - "${CHATMEMORY_PORT}:8000"
     command: uvicorn run:app --host 0.0.0.0 --port 8000
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 
   db:
     container_name: chatmemory-db
@@ -35,6 +38,13 @@ services:
       - "${DB_PORT}:5432"
     volumes:
       - chatmemory-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
 
 volumes:
   chatmemory-postgres-data:
