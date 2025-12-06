@@ -266,6 +266,43 @@ def test_search(chat_memory):
     chat_memory.delete_history(user_id=user_id, session_id=session_id)
     chat_memory.delete_summaries(user_id=user_id, session_id=session_id)
 
+def test_search_includes_diary(chat_memory, monkeypatch):
+    """Search should retrieve diary embeddings alongside summaries/knowledge."""
+    user_id = str(uuid.uuid4())
+    fake_embedding = [0.01] * chat_memory.embedding_dimension
+
+    async def fake_embed(text: str):
+        return fake_embedding
+
+    async def fake_llm(system_prompt: str, user_prompt: str):
+        return "diary answer"
+
+    monkeypatch.setattr(chat_memory, "embed", fake_embed)
+    monkeypatch.setattr(chat_memory, "llm", fake_llm)
+
+    diary_date = datetime.date.today()
+    asyncio.run(
+        chat_memory.add_diary(
+            Diary(
+                user_id=user_id,
+                diary_date=diary_date,
+                content="Today I saw shooting stars",
+                metadata={"mood": "calm"},
+            )
+        )
+    )
+
+    search_result = asyncio.run(
+        chat_memory.search(user_id, "stars", top_k=3, search_content=False, include_retrieved_data=True)
+    )
+    assert search_result is not None
+    assert isinstance(search_result.answer, str)
+    assert search_result.retrieved_data is not None
+    assert "Diary" in search_result.retrieved_data
+    assert "shooting stars" in search_result.retrieved_data
+
+    chat_memory.delete_diary(user_id=user_id)
+
 def test_diary_crud(chat_memory):
     """Diary add/get/update/delete, with since/until filtering on diary_date."""
     user_id = str(uuid.uuid4())
