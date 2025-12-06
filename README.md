@@ -55,7 +55,9 @@ from chatmemory import ChatMemory
 
 cm = ChatMemory(
     openai_api_key="YOUR_OPENAI_API_KEY",
-    llm_model="gpt-4o",
+    llm_model="gpt-4.1",
+    embedding_model="text-embedding-3-large",
+    embedding_dimension=3072,
     # Your PostgreSQL configurations
     db_name="postgres",
     db_user="postgres",
@@ -67,6 +69,8 @@ cm = ChatMemory(
 app = FastAPI()
 app.include_router(cm.get_router())
 ```
+
+> ⚠️ Embedding compatibility: The embedding model and dimension define how vectors are stored. If you change either after data has been written, existing embeddings will no longer match new ones and retrieval quality will degrade (or fail). Use a fresh database or re-embed all stored content when switching models/dimensions.
 
 Start API server.
 
@@ -87,6 +91,8 @@ Below is a complete Python sample demonstrating how to interact with the ChatMem
 2. Simulate a session change (which triggers automatic summary generation for the previous session).
 3. Retrieve the generated summary.
 4. Perform a search to obtain an answer (with retrieved raw data).
+
+Search looks at summary embeddings and knowledge embeddings first, and also includes diary embeddings. If these are insufficient, it falls back to detailed history.
 
 ```python
 import requests
@@ -239,6 +245,67 @@ params = {
     "channel": "chatapp"  # Delete only messages from this channel
 }
 response = requests.delete(f"{BASE_URL}/history", params=params)
+```
+
+## 📅 Time filtering (`since` / `until`)
+
+You can scope data retrieval by time windows. Pass ISO 8601 datetimes; the server handles them differently per resource:
+
+- **History (`/history` GET):** `since` / `until` are compared to each message `created_at` (UTC). Combine with `user_id`, `session_id`, and `channel` as needed.
+- **Diary (`/diary` GET):** `since` / `until` are compared to the date-only `diary_date` (the date portion of your input is used).
+
+Example: last hour of history for one session/channel
+
+```python
+params = {
+    "user_id": "user123",
+    "session_id": "session456",
+    "channel": "chatapp",
+    "since": "2025-02-25T09:00:00Z",
+    "until": "2025-02-25T10:00:00Z",
+}
+requests.get(f"{BASE_URL}/history", params=params)
+```
+
+Example: diary entries between two dates (inclusive by `diary_date`)
+
+```python
+params = {
+    "user_id": "user123",
+    "since": "2025-02-20T00:00:00Z",  # treated as 2025-02-20
+    "until": "2025-02-25T23:59:59Z",   # treated as 2025-02-25
+    "limit": 50,
+}
+requests.get(f"{BASE_URL}/diary", params=params)
+```
+
+## 📔 Diary entries
+
+ChatMemory lets you store daily notes as **diaries** with embeddings, separate from chat history. Each diary is keyed by `(user_id, diary_date)` (user_id required, unique per date) and carries optional metadata. Endpoints:
+
+- `POST /diary` — upsert a diary entry (embedding computed automatically; content required)
+- `GET /diary` — fetch by `user_id`, `diary_date`, or range with `since` / `until` (compared to `diary_date`)
+- `DELETE /diary` — delete by `user_id` and/or `diary_date`
+
+```python
+# Upsert diaries (creates or updates)
+requests.post(f"{BASE_URL}/diary", json={
+    "user_id": "user123",
+    "diary_date": "2025-02-24",
+    "content": "Tried a new ramen shop. Great broth!",
+    "metadata": {"mood": "happy"}
+})
+
+# Get a date range
+requests.get(f"{BASE_URL}/diary", params={
+    "user_id": "user123",
+    "since": "2025-02-20T00:00:00Z",
+    "until": "2025-02-25T23:59:59Z",
+    "limit": 50
+})
+
+# Delete one or many
+requests.delete(f"{BASE_URL}/diary", params={"user_id": "user123", "diary_date": "2025-02-24"})
 ```
 
 ## ❓ FAQ
