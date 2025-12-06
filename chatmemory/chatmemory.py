@@ -900,6 +900,32 @@ class ChatMemory:
         rows = cur.fetchall()
         return [Knowledge(created_at=row[0], knowledge=row[1]) for row in rows]
 
+    def search_diary(self, cur, user_id: str, query_embedding_str: str, top_k: int) -> List[Diary]:
+        """
+        Search diary records using vector similarity against diary embeddings.
+        """
+        cur.execute(
+            """
+            SELECT created_at, user_id, diary_date, content, metadata
+            FROM diaries
+            WHERE user_id = %s
+            ORDER BY embedding <-> %s::vector
+            LIMIT %s
+            """,
+            (user_id, query_embedding_str, top_k),
+        )
+        rows = cur.fetchall()
+        return [
+            Diary(
+                created_at=row[0],
+                user_id=row[1],
+                diary_date=row[2],
+                content=row[3],
+                metadata=row[4] or {},
+            )
+            for row in rows
+        ]
+
     def search_content(self, conn, user_id: str, query_embedding_str: str, top_k: int) -> Dict[str, List[HistoryMessage]]:
         """
         Search conversation histories based on summaries.
@@ -953,12 +979,19 @@ class ChatMemory:
                 [f"Knowledge about user ({k.created_at}): {k.knowledge}" for k in knowledges]
             ) if knowledges else ""
 
+            diaries = self.search_diary(cur, user_id, vector_str, top_k)
+            diaries_text = "\n".join(
+                [f"Diary ({d.diary_date}): {d.content}" for d in diaries]
+            ) if diaries else ""
+
             retrieved_data = ""
-            if summaries_text or knowledges_text:
+            if summaries_text or knowledges_text or diaries_text:
                 if summaries_text:
                     retrieved_data += f"====\n\n{summaries_text}\n\n"
                 if knowledges_text:
                     retrieved_data += f"====\n\n{knowledges_text}\n\n"
+                if diaries_text:
+                    retrieved_data += f"====\n\n{diaries_text}\n\n"
 
                 user_prompt = f"User Question: {query}\n\n{retrieved_data}\n====\n\n"
                 user_prompt += (self.search_user_prompt_content if search_content else self.search_user_prompt)

@@ -327,7 +327,19 @@ def test_knowledge_endpoints(test_user):
     assert "knowledge" in data
     assert len(data["knowledge"]) >= 1
 
-def test_search_endpoint(test_user, test_session):
+def test_search_endpoint(test_user, test_session, monkeypatch):
+    # Patch embed/llm to avoid external calls and make deterministic answers.
+    fake_embedding = [0.01] * chat_memory.embedding_dimension
+
+    async def fake_embed(text: str):
+        return fake_embedding
+
+    async def fake_llm(system_prompt: str, user_prompt: str):
+        return "fake answer"
+
+    monkeypatch.setattr(chat_memory, "embed", fake_embed)
+    monkeypatch.setattr(chat_memory, "llm", fake_llm)
+
     # Ensure there is conversation history and a summary for search.
     payload = {
         "user_id": test_user,
@@ -342,6 +354,17 @@ def test_search_endpoint(test_user, test_session):
 
     # Create summary for the session.
     response = client.post("/summary/create", params={"user_id": test_user, "session_id": test_session})
+    assert response.status_code == 200
+
+    # Add a diary entry to verify diaries are included in retrieval.
+    today = datetime.date.today().isoformat()
+    diary_payload = {
+        "user_id": test_user,
+        "diary_date": today,
+        "content": "Diary note about a joke",
+        "metadata": {"mood": "fun"},
+    }
+    response = client.post("/diary", json=diary_payload)
     assert response.status_code == 200
 
     # POST /search: Perform a search query.
@@ -360,9 +383,13 @@ def test_search_endpoint(test_user, test_session):
     result = data["result"]
     assert "answer" in result
     assert isinstance(result["answer"], str)
+    assert "Diary" in result.get("retrieved_data", "")
+    assert "Diary note about a joke" in result.get("retrieved_data", "")
 
     # Cleanup: Delete created history and summaries.
     response = client.delete("/history", params={"user_id": test_user, "session_id": test_session})
     assert response.status_code == 200
     response = client.delete("/summary", params={"user_id": test_user, "session_id": test_session})
+    assert response.status_code == 200
+    response = client.delete("/diary", params={"user_id": test_user})
     assert response.status_code == 200
