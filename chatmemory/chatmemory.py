@@ -273,19 +273,6 @@ class ChatMemory:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_history_user_id ON conversation_history(user_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_history_session_id ON conversation_history(session_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_history_channel ON conversation_history(channel);")
-
-            print(f"""
-                CREATE TABLE IF NOT EXISTS conversation_summaries (
-                    id SERIAL PRIMARY KEY,
-                    created_at TIMESTAMP NOT NULL,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    embedding_summary VECTOR({self.embedding_dimension}),
-                    content_embedding VECTOR({self.embedding_dimension})
-                );
-                """)
-
             cur.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS conversation_summaries (
