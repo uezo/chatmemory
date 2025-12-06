@@ -1,3 +1,4 @@
+import datetime
 import os
 import uuid
 import pytest
@@ -5,6 +6,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from chatmemory import ChatMemory
 
+from dotenv import load_dotenv
+load_dotenv()
 
 # Create a ChatMemory instance with real configuration.
 DB_NAME = os.getenv("DB_NAME", "your_db")
@@ -14,12 +17,16 @@ DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", 5432)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your_openai_api_key")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4.1")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "3072"))
 
 chat_memory = ChatMemory(
     openai_api_key=OPENAI_API_KEY,
     openai_base_url=OPENAI_BASE_URL,
     llm_model=LLM_MODEL,
+    embedding_model=EMBEDDING_MODEL,
+    embedding_dimension=EMBEDDING_DIMENSION,
     db_name=DB_NAME,
     db_user=DB_USER,
     db_password=DB_PASSWORD,
@@ -194,6 +201,89 @@ def test_get_sessions_endpoint():
     for session_id in session_ids:
         response = client.delete("/history", params={"user_id": user_id, "session_id": session_id})
         assert response.status_code == 200
+
+def test_diary_endpoints():
+    """Diary add/get/update/delete via REST API, including since/until filtering."""
+    user_id = str(uuid.uuid4())
+    today = datetime.date.today()
+    yesterday = today - datetime.timedelta(days=1)
+
+    today_payload = {
+        "user_id": user_id,
+        "diary_date": today.isoformat(),
+        "content": "Today diary",
+        "metadata": {"mood": "good"},
+    }
+    yesterday_payload = {
+        "user_id": user_id,
+        "diary_date": yesterday.isoformat(),
+        "content": "Yesterday diary",
+        "metadata": {"mood": "ok"},
+    }
+
+    # Add two diaries
+    response = client.post("/diary", json=today_payload)
+    assert response.status_code == 200
+    assert response.json()["status"] == "diary added"
+
+    response = client.post("/diary", json=yesterday_payload)
+    assert response.status_code == 200
+    assert response.json()["status"] == "diary added"
+
+    # Get by exact date
+    response = client.get("/diary", params={"user_id": user_id, "diary_date": today.isoformat()})
+    assert response.status_code == 200
+    diaries_exact = response.json()["diaries"]
+    assert len(diaries_exact) == 1
+    assert diaries_exact[0]["content"] == "Today diary"
+
+    # since/until should use diary_date
+    since_dt = datetime.datetime.combine(today, datetime.time.min)
+    response = client.get("/diary", params={"user_id": user_id, "since": since_dt.isoformat()})
+    assert response.status_code == 200
+    diaries_since = response.json()["diaries"]
+    assert all(datetime.date.fromisoformat(d["diary_date"]) >= today for d in diaries_since)
+
+    until_dt = datetime.datetime.combine(yesterday, datetime.time.max)
+    response = client.get("/diary", params={"user_id": user_id, "until": until_dt.isoformat()})
+    assert response.status_code == 200
+    diaries_until = response.json()["diaries"]
+    assert all(datetime.date.fromisoformat(d["diary_date"]) <= yesterday for d in diaries_until)
+
+    # Update today's diary content and metadata
+    update_payload = {
+        "user_id": user_id,
+        "diary_date": today.isoformat(),
+        "content": "Today diary updated",
+        "metadata": {"mood": "great"},
+    }
+    response = client.put("/diary", json=update_payload)
+    assert response.status_code == 200
+    assert response.json()["status"] == "diary updated"
+
+    response = client.get("/diary", params={"user_id": user_id, "diary_date": today.isoformat()})
+    assert response.status_code == 200
+    diaries_after_update = response.json()["diaries"]
+    assert diaries_after_update[0]["content"] == "Today diary updated"
+    assert diaries_after_update[0]["metadata"].get("mood") == "great"
+
+    # Delete specific and all
+    response = client.delete("/diary", params={"user_id": user_id, "diary_date": today.isoformat()})
+    assert response.status_code == 200
+    assert response.json()["status"] == "diary deleted"
+
+    response = client.get("/diary", params={"user_id": user_id})
+    assert response.status_code == 200
+    remaining = response.json()["diaries"]
+    assert all(datetime.date.fromisoformat(d["diary_date"]) != today for d in remaining)
+
+    response = client.delete("/diary", params={"user_id": user_id})
+    assert response.status_code == 200
+    assert response.json()["status"] == "diary deleted"
+
+    response = client.get("/diary", params={"user_id": user_id})
+    assert response.status_code == 200
+    assert response.json()["diaries"] == []
 
 def test_summary_endpoints(test_user, test_session):
     # First, add some conversation history so a summary can be generated.
