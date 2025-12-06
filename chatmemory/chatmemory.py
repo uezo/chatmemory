@@ -132,8 +132,9 @@ class ChatMemory:
         *,
         openai_api_key: str = None,
         openai_base_url: str = None,
-        llm_model: str = "gpt-4o",
+        llm_model: str = "gpt-4.1",
         embedding_model: str = "text-embedding-3-small",
+        embedding_dimension: int = None,
         db_name: str = "chatmemory",
         db_user: str = "postgres",
         db_password: str = "postgres",
@@ -150,6 +151,7 @@ class ChatMemory:
         )
         self.llm_model = llm_model
         self.embedding_model = embedding_model
+        self.embedding_dimension = embedding_dimension or 3072 if embedding_model == "text-embedding-3-large" else 1536
         self.search_system_prompt = search_system_prompt or self.SEARCH_SYSTEM_PROMPT_DEFAULT
         self.search_user_prompt = search_user_prompt or self.SEARCH_USER_PROMPT_DEFAULT
         self.search_user_prompt_content = search_user_prompt_content or self.SEARCH_USER_PROMPT_CONTENT_DEFAULT
@@ -246,28 +248,28 @@ class ChatMemory:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_history_session_id ON conversation_history(session_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_history_channel ON conversation_history(channel);")
             cur.execute(
-                """
+                f"""
                 CREATE TABLE IF NOT EXISTS conversation_summaries (
                     id SERIAL PRIMARY KEY,
                     created_at TIMESTAMP NOT NULL,
                     user_id TEXT NOT NULL,
                     session_id TEXT NOT NULL,
                     summary TEXT NOT NULL,
-                    embedding_summary VECTOR(1536),
-                    content_embedding VECTOR(1536)
+                    embedding_summary VECTOR({self.embedding_dimension}),
+                    content_embedding VECTOR({self.embedding_dimension})
                 );
                 """
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_summary_user_id ON conversation_summaries(user_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_summary_session_id ON conversation_summaries(session_id);")
             cur.execute(
-                """
+                f"""
                 CREATE TABLE IF NOT EXISTS user_knowledge (
                     id SERIAL PRIMARY KEY,
                     created_at TIMESTAMP NOT NULL,
                     user_id TEXT NOT NULL,
                     knowledge TEXT NOT NULL,
-                    embedding VECTOR(1536)
+                    embedding VECTOR({self.embedding_dimension})
                 );
                 """
             )
