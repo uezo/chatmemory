@@ -282,13 +282,11 @@ def test_search_includes_diary(chat_memory, monkeypatch):
 
     diary_date = datetime.date.today()
     asyncio.run(
-        chat_memory.add_diary(
-            Diary(
-                user_id=user_id,
-                diary_date=diary_date,
-                content="Today I saw shooting stars",
-                metadata={"mood": "calm"},
-            )
+        chat_memory.update_diary(
+            user_id=user_id,
+            diary_date=diary_date,
+            content="Today I saw shooting stars",
+            metadata={"mood": "calm"},
         )
     )
 
@@ -312,9 +310,9 @@ def test_diary_crud(chat_memory):
     diary_today = Diary(user_id=user_id, diary_date=today, content="Today diary", metadata={"mood": "good"})
     diary_yesterday = Diary(user_id=user_id, diary_date=yesterday, content="Yesterday diary", metadata={"mood": "ok"})
 
-    # Add two diaries
-    asyncio.run(chat_memory.add_diary(diary_today))
-    asyncio.run(chat_memory.add_diary(diary_yesterday))
+    # Add two diaries (exclude created_at which is not accepted by update_diary)
+    asyncio.run(chat_memory.update_diary(**diary_today.model_dump(exclude={"created_at"})))
+    asyncio.run(chat_memory.update_diary(**diary_yesterday.model_dump(exclude={"created_at"})))
 
     # Get by exact date
     diaries_exact = chat_memory.get_diaries(user_id=user_id, diary_date=today)
@@ -342,6 +340,20 @@ def test_diary_crud(chat_memory):
     diaries_after_update = chat_memory.get_diaries(user_id=user_id, diary_date=today)
     assert diaries_after_update[0].content == "Today diary updated"
     assert diaries_after_update[0].metadata.get("mood") == "great"
+
+    # Upsert again to verify existing entry is updated
+    asyncio.run(
+        chat_memory.update_diary(
+            user_id=user_id,
+            diary_date=today,
+            content="Today diary second update",
+            metadata={"mood": "awesome"},
+        )
+    )
+    diaries_after_second_update = chat_memory.get_diaries(user_id=user_id, diary_date=today)
+    assert len(diaries_after_second_update) == 1
+    assert diaries_after_second_update[0].content == "Today diary second update"
+    assert diaries_after_second_update[0].metadata.get("mood") == "awesome"
 
     # Delete specific and all
     chat_memory.delete_diary(user_id=user_id, diary_date=today)

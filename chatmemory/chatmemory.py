@@ -41,7 +41,7 @@ class SessionSummary(BaseModel):
 
 class Diary(BaseModel):
     created_at: Optional[datetime.datetime] = None  # If not provided, server sets the timestamp
-    user_id: Optional[str] = None
+    user_id: str
     diary_date: datetime.date
     content: str
     metadata: dict = {}
@@ -107,20 +107,14 @@ class SearchResponse(BaseModel):
 class DeleteResponse(BaseModel):
     status: str
 
-class AddDiaryRequest(BaseModel):
+class UpdateDiaryRequest(BaseModel):
     created_at: Optional[datetime.datetime] = None
-    user_id: Optional[str] = None
+    user_id: str
     diary_date: datetime.date
     content: str
     metadata: dict = {}
 
-class UpdateDiaryRequest(BaseModel):
-    user_id: Optional[str] = None
-    diary_date: datetime.date
-    content: Optional[str] = None
-    metadata: Optional[dict] = None
-
-class AddDiaryResponse(BaseModel):
+class UpdateDiaryResponse(BaseModel):
     status: str
 
 class GetDiaryResponse(BaseModel):
@@ -305,11 +299,12 @@ class ChatMemory:
                 CREATE TABLE IF NOT EXISTS diaries (
                     id SERIAL PRIMARY KEY,
                     created_at TIMESTAMP NOT NULL,
-                    user_id TEXT,
+                    user_id TEXT NOT NULL,
                     diary_date DATE NOT NULL,
                     content TEXT NOT NULL,
                     metadata JSONB,
-                    embedding VECTOR({self.embedding_dimension})
+                    embedding VECTOR({self.embedding_dimension}),
+                    UNIQUE (user_id, diary_date)
                 );
                 """
             )
@@ -785,48 +780,34 @@ class ChatMemory:
 
     async def update_diary(
         self,
-        user_id: Optional[str],
+        user_id: str,
         diary_date: datetime.date,
         content: Optional[str] = None,
         metadata: Optional[dict] = None,
     ):
-        """Update a diary entry identified by user_id (can be NULL) and diary_date."""
-        if content is None and metadata is None:
-            raise ValueError("Either content or metadata must be provided for update.")
+        """
+        Upsert a diary entry identified by user_id and diary_date.
+        content is required; metadata defaults to {} if omitted.
+        """
+        if content is None:
+            raise ValueError("content is required for diary upsert.")
 
-        set_clauses = []
-        params = []
-        embedding = None
-        if content is not None:
-            set_clauses.append("content = %s")
-            params.append(content)
-            embedding = await self.embed(content)
-            set_clauses.append("embedding = %s")
-            params.append(embedding)
-        if metadata is not None:
-            set_clauses.append("metadata = %s")
-            params.append(json.dumps(metadata))
-
-        where_clauses = ["diary_date = %s"]
-        params.append(diary_date)
-        if user_id is None:
-            where_clauses.append("user_id IS NULL")
-        else:
-            where_clauses.append("user_id = %s")
-            params.append(user_id)
-
-        with self.get_db_cursor() as (cur, _):
+        now = datetime.datetime.utcnow()
+        embedding = await self.embed(content)
+        with self.get_db_cursor() as (cur, conn):
             cur.execute(
-                f"""
-                UPDATE diaries
-                SET {', '.join(set_clauses)}
-                WHERE {' AND '.join(where_clauses)}
+                """
+                INSERT INTO diaries (created_at, user_id, diary_date, content, metadata, embedding)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, diary_date) DO UPDATE SET
+                    content = EXCLUDED.content,
+                    metadata = EXCLUDED.metadata,
+                    embedding = EXCLUDED.embedding
                 """,
-                tuple(params),
+                (now, user_id, diary_date, content, json.dumps(metadata or {}), embedding),
             )
-            if cur.rowcount == 0:
-                raise ValueError("Diary not found for update.")
-        logger.info(f"Updated diary on {diary_date} (user: {user_id}).")
+            conn.commit()
+        logger.info(f"Upserted diary on {diary_date} (user: {user_id}).")
 
     def delete_diary(self, user_id: Optional[str] = None, diary_date: Optional[datetime.date] = None):
         """
@@ -1209,14 +1190,19 @@ class ChatMemory:
                 raise HTTPException(status_code=500, detail=str(ex))
 
         # ----- Diary Endpoints -----
-        @router.post("/diary", response_model=AddDiaryResponse, summary="Add diary entry", tags=["Diary"])
-        async def add_diary_endpoint(request: AddDiaryRequest):
+        @router.post("/diary", response_model=UpdateDiaryResponse, summary="Upsert diary entry (POST)", tags=["Diary"])
+        async def add_diary_endpoint(request: UpdateDiaryRequest):
             """
-            Add a diary entry. user_id can be omitted (NULL).
+            Upsert a diary entry.
             """
             try:
-                await self.add_diary(Diary(**request.model_dump()))
-                return AddDiaryResponse(status="diary added")
+                await self.update_diary(
+                    user_id=request.user_id,
+                    diary_date=request.diary_date,
+                    content=request.content,
+                    metadata=request.metadata,
+                )
+                return UpdateDiaryResponse(status="diary upserted")
             except Exception as ex:
                 logger.error(f"Error in add_diary_endpoint: {ex}")
                 raise HTTPException(status_code=500, detail=str(ex))
@@ -1247,26 +1233,6 @@ class ChatMemory:
                 raise HTTPException(status_code=400, detail=str(ve))
             except Exception as ex:
                 logger.error(f"Error in get_diary_endpoint: {ex}")
-                raise HTTPException(status_code=500, detail=str(ex))
-
-        @router.put("/diary", response_model=DeleteResponse, summary="Update diary entry", tags=["Diary"])
-        async def update_diary_endpoint(request: UpdateDiaryRequest):
-            """
-            Update a diary entry identified by user_id (can be NULL) and diary_date.
-            """
-            try:
-                await self.update_diary(
-                    user_id=request.user_id,
-                    diary_date=request.diary_date,
-                    content=request.content,
-                    metadata=request.metadata,
-                )
-                return DeleteResponse(status="diary updated")
-            except ValueError as ve:
-                logger.error(f"Update diary error: {ve}")
-                raise HTTPException(status_code=400, detail=str(ve))
-            except Exception as ex:
-                logger.error(f"Error in update_diary_endpoint: {ex}")
                 raise HTTPException(status_code=500, detail=str(ex))
 
         @router.delete("/diary", response_model=DeleteResponse, summary="Delete diary entries", tags=["Diary"])

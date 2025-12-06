@@ -224,11 +224,11 @@ def test_diary_endpoints():
     # Add two diaries
     response = client.post("/diary", json=today_payload)
     assert response.status_code == 200
-    assert response.json()["status"] == "diary added"
+    assert response.json()["status"] == "diary upserted"
 
     response = client.post("/diary", json=yesterday_payload)
     assert response.status_code == 200
-    assert response.json()["status"] == "diary added"
+    assert response.json()["status"] == "diary upserted"
 
     # Get by exact date
     response = client.get("/diary", params={"user_id": user_id, "diary_date": today.isoformat()})
@@ -250,22 +250,40 @@ def test_diary_endpoints():
     diaries_until = response.json()["diaries"]
     assert all(datetime.date.fromisoformat(d["diary_date"]) <= yesterday for d in diaries_until)
 
-    # Update today's diary content and metadata
+    # Update today's diary content and metadata (upsert via POST)
     update_payload = {
         "user_id": user_id,
         "diary_date": today.isoformat(),
         "content": "Today diary updated",
         "metadata": {"mood": "great"},
     }
-    response = client.put("/diary", json=update_payload)
+    response = client.post("/diary", json=update_payload)
     assert response.status_code == 200
-    assert response.json()["status"] == "diary updated"
+    assert response.json()["status"] == "diary upserted"
 
     response = client.get("/diary", params={"user_id": user_id, "diary_date": today.isoformat()})
     assert response.status_code == 200
     diaries_after_update = response.json()["diaries"]
     assert diaries_after_update[0]["content"] == "Today diary updated"
     assert diaries_after_update[0]["metadata"].get("mood") == "great"
+
+    # Upsert again to confirm update of existing entry
+    second_update_payload = {
+        "user_id": user_id,
+        "diary_date": today.isoformat(),
+        "content": "Today diary second update",
+        "metadata": {"mood": "awesome"},
+    }
+    response = client.post("/diary", json=second_update_payload)
+    assert response.status_code == 200
+    assert response.json()["status"] == "diary upserted"
+
+    response = client.get("/diary", params={"user_id": user_id, "diary_date": today.isoformat()})
+    assert response.status_code == 200
+    diaries_after_second = response.json()["diaries"]
+    assert len(diaries_after_second) == 1
+    assert diaries_after_second[0]["content"] == "Today diary second update"
+    assert diaries_after_second[0]["metadata"].get("mood") == "awesome"
 
     # Delete specific and all
     response = client.delete("/diary", params={"user_id": user_id, "diary_date": today.isoformat()})
