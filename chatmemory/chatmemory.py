@@ -39,6 +39,13 @@ class SessionSummary(BaseModel):
     session_id: str
     summary: str
 
+class Diary(BaseModel):
+    created_at: Optional[datetime.datetime] = None  # If not provided, server sets the timestamp
+    user_id: Optional[str] = None
+    diary_date: datetime.date
+    content: str
+    metadata: dict = {}
+
 class Knowledge(BaseModel):
     created_at: datetime.datetime
     knowledge: str
@@ -99,6 +106,25 @@ class SearchResponse(BaseModel):
 
 class DeleteResponse(BaseModel):
     status: str
+
+class AddDiaryRequest(BaseModel):
+    created_at: Optional[datetime.datetime] = None
+    user_id: Optional[str] = None
+    diary_date: datetime.date
+    content: str
+    metadata: dict = {}
+
+class UpdateDiaryRequest(BaseModel):
+    user_id: Optional[str] = None
+    diary_date: datetime.date
+    content: Optional[str] = None
+    metadata: Optional[dict] = None
+
+class AddDiaryResponse(BaseModel):
+    status: str
+
+class GetDiaryResponse(BaseModel):
+    diaries: List[Diary]
 
 
 # ==============================
@@ -247,6 +273,19 @@ class ChatMemory:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_history_user_id ON conversation_history(user_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_history_session_id ON conversation_history(session_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_history_channel ON conversation_history(channel);")
+
+            print(f"""
+                CREATE TABLE IF NOT EXISTS conversation_summaries (
+                    id SERIAL PRIMARY KEY,
+                    created_at TIMESTAMP NOT NULL,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    embedding_summary VECTOR({self.embedding_dimension}),
+                    content_embedding VECTOR({self.embedding_dimension})
+                );
+                """)
+
             cur.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS conversation_summaries (
@@ -274,6 +313,21 @@ class ChatMemory:
                 """
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_user_id ON user_knowledge(user_id);")
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS diaries (
+                    id SERIAL PRIMARY KEY,
+                    created_at TIMESTAMP NOT NULL,
+                    user_id TEXT,
+                    diary_date DATE NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata JSONB,
+                    embedding VECTOR({self.embedding_dimension})
+                );
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_diary_user_id ON diaries(user_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_diary_date ON diaries(diary_date);")
             logger.info("Database initialized successfully.")
 
     async def llm(self, system_prompt: str, user_prompt: str) -> str:
@@ -352,7 +406,7 @@ class ChatMemory:
             if channel:
                 conditions.append("channel = %s")
                 params.append(channel)
-            # Prefer since/until. if missing, use within_seconds.
+            # Prefer since/until. If missing, use within_seconds.
             if since:
                 conditions.append("created_at >= %s")
                 params.append(since)
@@ -669,6 +723,162 @@ class ChatMemory:
                 cur.execute("DELETE FROM user_knowledge WHERE user_id = %s", (user_id,))
                 logger.info(f"Deleted all knowledge for user {user_id}.")
 
+    async def add_diary(self, diary: Diary):
+        """Insert a diary entry with embedding."""
+        created_at = diary.created_at or datetime.datetime.utcnow()
+        embedding = await self.embed(diary.content)
+        with self.get_db_cursor() as (cur, _):
+            cur.execute(
+                """
+                INSERT INTO diaries (created_at, user_id, diary_date, content, metadata, embedding)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (created_at, diary.user_id, diary.diary_date, diary.content, json.dumps(diary.metadata), embedding),
+            )
+        logger.info(f"Inserted diary on {diary.diary_date} (user: {diary.user_id}).")
+
+    def get_diaries(
+        self,
+        user_id: Optional[str] = None,
+        diary_date: Optional[datetime.date] = None,
+        since: Optional[datetime.datetime] = None,
+        until: Optional[datetime.datetime] = None,
+        limit: int = 1000,
+    ) -> List[Diary]:
+        """
+        Retrieve diaries filtered by user_id, diary_date, or diary_date range (since/until).
+        since/until are evaluated against diary_date, not created_at.
+        At least one filter must be provided.
+        """
+        if not any([user_id, diary_date, since, until]):
+            raise ValueError("At least one filter (user_id, diary_date, since, until) must be specified.")
+
+        since_date = since.date() if since else None
+        until_date = until.date() if until else None
+
+        with self.get_db_cursor() as (cur, _):
+            query_parts = ["SELECT created_at, user_id, diary_date, content, metadata FROM diaries"]
+            params = []
+            conditions = []
+
+            if user_id is not None:
+                conditions.append("user_id = %s")
+                params.append(user_id)
+            if diary_date is not None:
+                conditions.append("diary_date = %s")
+                params.append(diary_date)
+            if since_date is not None:
+                conditions.append("diary_date >= %s")
+                params.append(since_date)
+            if until_date is not None:
+                conditions.append("diary_date <= %s")
+                params.append(until_date)
+
+            if conditions:
+                query_parts.append("WHERE " + " AND ".join(conditions))
+
+            query_parts.append("ORDER BY diary_date DESC, created_at DESC LIMIT %s")
+            params.append(limit)
+
+            query = " ".join(query_parts)
+            cur.execute(query, tuple(params))
+            rows = cur.fetchall()
+
+        logger.info(f"Retrieved {len(rows)} diary records.")
+        return [
+            Diary(
+                created_at=row[0],
+                user_id=row[1],
+                diary_date=row[2],
+                content=row[3],
+                metadata=row[4] or {},
+            )
+            for row in rows
+        ]
+
+    async def update_diary(
+        self,
+        user_id: Optional[str],
+        diary_date: datetime.date,
+        content: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ):
+        """Update a diary entry identified by user_id (can be NULL) and diary_date."""
+        if content is None and metadata is None:
+            raise ValueError("Either content or metadata must be provided for update.")
+
+        set_clauses = []
+        params = []
+        embedding = None
+        if content is not None:
+            set_clauses.append("content = %s")
+            params.append(content)
+            embedding = await self.embed(content)
+            set_clauses.append("embedding = %s")
+            params.append(embedding)
+        if metadata is not None:
+            set_clauses.append("metadata = %s")
+            params.append(json.dumps(metadata))
+
+        where_clauses = ["diary_date = %s"]
+        params.append(diary_date)
+        if user_id is None:
+            where_clauses.append("user_id IS NULL")
+        else:
+            where_clauses.append("user_id = %s")
+            params.append(user_id)
+
+        with self.get_db_cursor() as (cur, _):
+            cur.execute(
+                f"""
+                UPDATE diaries
+                SET {', '.join(set_clauses)}
+                WHERE {' AND '.join(where_clauses)}
+                """,
+                tuple(params),
+            )
+            if cur.rowcount == 0:
+                raise ValueError("Diary not found for update.")
+        logger.info(f"Updated diary on {diary_date} (user: {user_id}).")
+
+    def delete_diary(self, user_id: Optional[str] = None, diary_date: Optional[datetime.date] = None):
+        """
+        Delete diary entries filtered by user_id and/or diary_date.
+        If no filters are provided, all diary entries will be deleted.
+        """
+        with self.get_db_cursor() as (cur, _):
+            query_parts = ["DELETE FROM diaries"]
+            params = []
+            conditions = []
+
+            if user_id is None and diary_date is None:
+                # No filters: delete all diaries
+                pass
+            else:
+                if user_id is None:
+                    conditions.append("user_id IS NULL")
+                else:
+                    conditions.append("user_id = %s")
+                    params.append(user_id)
+                if diary_date is not None:
+                    conditions.append("diary_date = %s")
+                    params.append(diary_date)
+
+            if conditions:
+                query_parts.append("WHERE " + " AND ".join(conditions))
+
+            query = " ".join(query_parts)
+            cur.execute(query, tuple(params))
+
+        log_message = "Deleted diary entries"
+        if user_id is not None:
+            log_message += f" for user {user_id}"
+        if user_id is None and (diary_date is None):
+            log_message += " (all)"
+        if diary_date is not None:
+            log_message += f" on {diary_date}"
+        logger.info(log_message + ".")
+
     def search_summary(self, cur, user_id: str, query_embedding_str: str, top_k: int) -> List[SessionSummary]:
         """
         Search for conversation summaries using vector similarity.
@@ -976,6 +1186,82 @@ class ChatMemory:
                 return DeleteResponse(status="knowledge deleted")
             except Exception as ex:
                 logger.error(f"Error in delete_knowledge_endpoint: {ex}")
+                raise HTTPException(status_code=500, detail=str(ex))
+
+        # ----- Diary Endpoints -----
+        @router.post("/diary", response_model=AddDiaryResponse, summary="Add diary entry", tags=["Diary"])
+        async def add_diary_endpoint(request: AddDiaryRequest):
+            """
+            Add a diary entry. user_id can be omitted (NULL).
+            """
+            try:
+                await self.add_diary(Diary(**request.model_dump()))
+                return AddDiaryResponse(status="diary added")
+            except Exception as ex:
+                logger.error(f"Error in add_diary_endpoint: {ex}")
+                raise HTTPException(status_code=500, detail=str(ex))
+
+        @router.get("/diary", response_model=GetDiaryResponse, summary="Get diary entries", tags=["Diary"])
+        def get_diary_endpoint(
+            user_id: Optional[str] = Query(None),
+            diary_date: Optional[datetime.date] = Query(None, description="Specific diary_date to fetch"),
+            since: Optional[datetime.datetime] = Query(None, description="Start datetime; compared against diary_date"),
+            until: Optional[datetime.datetime] = Query(None, description="End datetime; compared against diary_date"),
+            limit: int = Query(1000, description="Maximum number of diary entries to return"),
+        ):
+            """
+            Retrieve diary entries filtered by user_id, diary_date, or diary_date range.
+            since/until are evaluated against diary_date (date), not created_at.
+            """
+            try:
+                diaries = self.get_diaries(
+                    user_id=user_id,
+                    diary_date=diary_date,
+                    since=since,
+                    until=until,
+                    limit=limit,
+                )
+                return GetDiaryResponse(diaries=diaries)
+            except ValueError as ve:
+                logger.error(f"Get diary error: {ve}")
+                raise HTTPException(status_code=400, detail=str(ve))
+            except Exception as ex:
+                logger.error(f"Error in get_diary_endpoint: {ex}")
+                raise HTTPException(status_code=500, detail=str(ex))
+
+        @router.put("/diary", response_model=DeleteResponse, summary="Update diary entry", tags=["Diary"])
+        async def update_diary_endpoint(request: UpdateDiaryRequest):
+            """
+            Update a diary entry identified by user_id (can be NULL) and diary_date.
+            """
+            try:
+                await self.update_diary(
+                    user_id=request.user_id,
+                    diary_date=request.diary_date,
+                    content=request.content,
+                    metadata=request.metadata,
+                )
+                return DeleteResponse(status="diary updated")
+            except ValueError as ve:
+                logger.error(f"Update diary error: {ve}")
+                raise HTTPException(status_code=400, detail=str(ve))
+            except Exception as ex:
+                logger.error(f"Error in update_diary_endpoint: {ex}")
+                raise HTTPException(status_code=500, detail=str(ex))
+
+        @router.delete("/diary", response_model=DeleteResponse, summary="Delete diary entries", tags=["Diary"])
+        def delete_diary_endpoint(
+            user_id: Optional[str] = Query(None),
+            diary_date: Optional[datetime.date] = Query(None)
+        ):
+            """
+            Delete diary entries filtered by user_id and/or diary_date. If neither is provided, delete all diaries.
+            """
+            try:
+                self.delete_diary(user_id=user_id, diary_date=diary_date)
+                return DeleteResponse(status="diary deleted")
+            except Exception as ex:
+                logger.error(f"Error in delete_diary_endpoint: {ex}")
                 raise HTTPException(status_code=500, detail=str(ex))
 
         # ----- Search Endpoint -----

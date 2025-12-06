@@ -1,9 +1,12 @@
 import asyncio
+import datetime
 import os
 import uuid
 import pytest
-from chatmemory.chatmemory import ChatMemory, HistoryMessage
+from chatmemory.chatmemory import ChatMemory, HistoryMessage, Diary
 
+from dotenv import load_dotenv
+load_dotenv()
 
 DB_NAME = os.getenv("DB_NAME", "your_db")
 DB_USER = os.getenv("DB_USER", "your_user")
@@ -12,7 +15,9 @@ DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", 5432)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your_openai_api_key")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4.1")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "3072"))
 
 # Fixture to instantiate ChatMemory with real configuration.
 # Be sure to configure these parameters appropriately for your environment.
@@ -22,6 +27,8 @@ def chat_memory():
         openai_api_key=OPENAI_API_KEY,
         openai_base_url=OPENAI_BASE_URL,
         llm_model=LLM_MODEL,
+        embedding_model=EMBEDDING_MODEL,
+        embedding_dimension=EMBEDDING_DIMENSION,
         db_name=DB_NAME,
         db_user=DB_USER,
         db_password=DB_PASSWORD,
@@ -258,3 +265,52 @@ def test_search(chat_memory):
     # Cleanup
     chat_memory.delete_history(user_id=user_id, session_id=session_id)
     chat_memory.delete_summaries(user_id=user_id, session_id=session_id)
+
+def test_diary_crud(chat_memory):
+    """Diary add/get/update/delete, with since/until filtering on diary_date."""
+    user_id = str(uuid.uuid4())
+    today = datetime.date.today()
+    yesterday = today - datetime.timedelta(days=1)
+
+    diary_today = Diary(user_id=user_id, diary_date=today, content="Today diary", metadata={"mood": "good"})
+    diary_yesterday = Diary(user_id=user_id, diary_date=yesterday, content="Yesterday diary", metadata={"mood": "ok"})
+
+    # Add two diaries
+    asyncio.run(chat_memory.add_diary(diary_today))
+    asyncio.run(chat_memory.add_diary(diary_yesterday))
+
+    # Get by exact date
+    diaries_exact = chat_memory.get_diaries(user_id=user_id, diary_date=today)
+    assert len(diaries_exact) == 1
+    assert diaries_exact[0].content == "Today diary"
+
+    # since/until should use diary_date
+    since_dt = datetime.datetime.combine(today, datetime.time.min)
+    diaries_since = chat_memory.get_diaries(user_id=user_id, since=since_dt)
+    assert all(d.diary_date >= today for d in diaries_since)
+
+    until_dt = datetime.datetime.combine(yesterday, datetime.time.max)
+    diaries_until = chat_memory.get_diaries(user_id=user_id, until=until_dt)
+    assert all(d.diary_date <= yesterday for d in diaries_until)
+
+    # Update today's diary content and metadata (embedding recomputed in impl)
+    asyncio.run(
+        chat_memory.update_diary(
+            user_id=user_id,
+            diary_date=today,
+            content="Today diary updated",
+            metadata={"mood": "great"},
+        )
+    )
+    diaries_after_update = chat_memory.get_diaries(user_id=user_id, diary_date=today)
+    assert diaries_after_update[0].content == "Today diary updated"
+    assert diaries_after_update[0].metadata.get("mood") == "great"
+
+    # Delete specific and all
+    chat_memory.delete_diary(user_id=user_id, diary_date=today)
+    remaining = chat_memory.get_diaries(user_id=user_id)
+    assert all(d.diary_date != today for d in remaining)
+
+    chat_memory.delete_diary(user_id=user_id)
+    with pytest.raises(ValueError):
+        chat_memory.get_diaries(user_id=None, diary_date=None)
