@@ -1283,8 +1283,9 @@ if __name__ == "__main__":
     DB_PORT = os.getenv("DB_PORT", 5432)
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
-    LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
-    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4.1")
+    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+    EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "3072"))
     CHATMEMORY_PORT = os.getenv("CHATMEMORY_PORT", 8000)
 
     cm = ChatMemory(
@@ -1292,6 +1293,7 @@ if __name__ == "__main__":
         openai_base_url=OPENAI_BASE_URL,
         llm_model=LLM_MODEL,
         embedding_model=EMBEDDING_MODEL,
+        embedding_dimension=EMBEDDING_DIMENSION,
         db_name=DB_NAME,
         db_user=DB_USER,
         db_password=DB_PASSWORD,
@@ -1299,6 +1301,6 @@ if __name__ == "__main__":
     )
 
     # Start server
-    app = FastAPI(title="ChatMemory", version="0.2.1")
+    app = FastAPI(title="ChatMemory", version="0.2.6")
     app.include_router(cm.get_router())
     uvicorn.run(app, host="0.0.0.0", port=int(CHATMEMORY_PORT))
