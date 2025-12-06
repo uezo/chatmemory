@@ -325,12 +325,15 @@ class ChatMemory:
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
         channel: Optional[str] = None,
-        within_seconds: int = 3600
+        within_seconds: int = 3600,
+        since: Optional[datetime.datetime] = None,
+        until: Optional[datetime.datetime] = None,
     ) -> List[HistoryMessageWithId]:
         """
         Retrieve conversation history for a given user, session, or channel (up to 1000 records).
         At least one of user_id or session_id must be provided.
-        Optionally filter by records created within the last `within_seconds` seconds (default: 3600, 0 means unlimited).
+        Optionally filter by records created within the last `within_seconds` seconds (default: 3600, 0 means unlimited),
+        or by a specific time range using `since` and/or `until`.
         """
         if not user_id and not session_id:
             raise ValueError("Either user_id or session_id must be specified.")
@@ -349,7 +352,14 @@ class ChatMemory:
             if channel:
                 conditions.append("channel = %s")
                 params.append(channel)
-            if within_seconds and within_seconds > 0:
+            # Prefer since/until. if missing, use within_seconds.
+            if since:
+                conditions.append("created_at >= %s")
+                params.append(since)
+            if until:
+                conditions.append("created_at <= %s")
+                params.append(until)
+            if not since and not until and within_seconds and within_seconds > 0:
                 conditions.append("created_at >= NOW() - INTERVAL '1 second' * %s")
                 params.append(within_seconds)
 
@@ -820,15 +830,27 @@ class ChatMemory:
             user_id: Optional[str] = Query(None), 
             session_id: Optional[str] = Query(None),
             channel: Optional[str] = Query(None),
-            within_seconds: int = Query(3600, description="Retrieve messages within the last N seconds. 0 means unlimited.")
+            within_seconds: int = Query(3600, description="Retrieve messages within the last N seconds. 0 means unlimited."),
+            since: Optional[datetime.datetime] = Query(None, description="Start datetime (ISO8601) for filtering history."),
+            until: Optional[datetime.datetime] = Query(None, description="End datetime (ISO8601) for filtering history.")
         ):
             """
             Retrieve conversation history for a specified user, session, or channel (max 1000 records).
             At least one of user_id or session_id must be provided.
-            Optionally filter by records created within the last `within_seconds` seconds (default: 3600, 0 means unlimited).
+            Optionally filter by:
+            - records created within the last `within_seconds` seconds (default: 3600, 0 means unlimited)
+            - or by a specific time range using `since` (start datetime) and/or `until` (end datetime, both ISO8601)
+            If both since/until and within_seconds are provided, since/until takes precedence.
             """
             try:
-                messages = self.get_history(user_id=user_id, session_id=session_id, channel=channel, within_seconds=within_seconds)
+                messages = self.get_history(
+                    user_id=user_id,
+                    session_id=session_id,
+                    channel=channel,
+                    within_seconds=within_seconds,
+                    since=since,
+                    until=until
+                )
                 return GetHistoryResponse(messages=messages)
             except ValueError as ve:
                 logger.error(f"Get history error: {ve}")
