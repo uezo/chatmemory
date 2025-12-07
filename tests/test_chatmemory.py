@@ -501,12 +501,10 @@ def test_diary_crud(chat_memory):
     assert diaries_exact[0].content == "Today diary"
 
     # since/until should use diary_date
-    since_dt = datetime.datetime.combine(today, datetime.time.min)
-    diaries_since = chat_memory.get_diaries(user_id=user_id, since=since_dt)
+    diaries_since = chat_memory.get_diaries(user_id=user_id, since=today)
     assert all(d.diary_date >= today for d in diaries_since)
 
-    until_dt = datetime.datetime.combine(yesterday, datetime.time.max)
-    diaries_until = chat_memory.get_diaries(user_id=user_id, until=until_dt)
+    diaries_until = chat_memory.get_diaries(user_id=user_id, until=yesterday)
     assert all(d.diary_date <= yesterday for d in diaries_until)
 
     # Update today's diary content and metadata (embedding recomputed in impl)

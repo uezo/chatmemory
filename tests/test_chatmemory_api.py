@@ -237,15 +237,13 @@ def test_diary_endpoints():
     assert len(diaries_exact) == 1
     assert diaries_exact[0]["content"] == "Today diary"
 
-    # since/until should use diary_date
-    since_dt = datetime.datetime.combine(today, datetime.time.min)
-    response = client.get("/diary", params={"user_id": user_id, "since": since_dt.isoformat()})
+    # since/until should use diary_date (date-only)
+    response = client.get("/diary", params={"user_id": user_id, "since": today.isoformat()})
     assert response.status_code == 200
     diaries_since = response.json()["diaries"]
     assert all(datetime.date.fromisoformat(d["diary_date"]) >= today for d in diaries_since)
 
-    until_dt = datetime.datetime.combine(yesterday, datetime.time.max)
-    response = client.get("/diary", params={"user_id": user_id, "until": until_dt.isoformat()})
+    response = client.get("/diary", params={"user_id": user_id, "until": yesterday.isoformat()})
     assert response.status_code == 200
     diaries_until = response.json()["diaries"]
     assert all(datetime.date.fromisoformat(d["diary_date"]) <= yesterday for d in diaries_until)

@@ -258,7 +258,7 @@ response = requests.delete(f"{BASE_URL}/history", params=params)
 You can scope data retrieval by time windows. Each resource handles filters slightly differently:
 
 - **History (`/history` GET):** `since` / `until` are ISO datetimes compared to each message `created_at` (UTC). Combine with `user_id`, `session_id`, and `channel` as needed.
-- **Diary (`/diary` GET):** `since` / `until` are ISO datetimes, but only the date portion is used to compare against `diary_date`.
+- **Diary (`/diary` GET):** `since` / `until` are **date-only** strings (`YYYY-MM-DD`) compared against `diary_date`.
 - **Search (`/search` POST):** `since` / `until` are **date-only** strings (`YYYY-MM-DD`). They’re evaluated as a window from local midnight to the next midnight using `utc_offset_hours` (e.g., JST = `+9`). Summaries/knowledge filter by `created_at` in that UTC-shifted window; diaries filter by the corresponding local-day window.
 
 Example: last hour of history for one session/channel
@@ -279,8 +279,8 @@ Example: diary entries between two dates (inclusive by `diary_date`)
 ```python
 params = {
     "user_id": "user123",
-    "since": "2025-02-20T00:00:00Z",  # treated as 2025-02-20
-    "until": "2025-02-25T23:59:59Z",   # treated as 2025-02-25
+    "since": "2025-02-20",  # date-only
+    "until": "2025-02-25",  # date-only
     "limit": 50,
 }
 requests.get(f"{BASE_URL}/diary", params=params)

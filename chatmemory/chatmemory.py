@@ -100,7 +100,7 @@ class SearchRequest(BaseModel):
     top_k: int = 5
     search_content: bool = False
     include_retrieved_data: bool = False
-    # Date-only filters; evaluated as local-midnight windows shifted by time_offset_minutes.
+    # Date-only filters; evaluated as local-midnight windows shifted by utc_offset_hours.
     since: Optional[datetime.date] = None
     until: Optional[datetime.date] = None
     utc_offset_hours: float = 0.0
@@ -727,20 +727,17 @@ class ChatMemory:
         self,
         user_id: Optional[str] = None,
         diary_date: Optional[datetime.date] = None,
-        since: Optional[datetime.datetime] = None,
-        until: Optional[datetime.datetime] = None,
+        since: Optional[datetime.date] = None,
+        until: Optional[datetime.date] = None,
         limit: int = 1000,
     ) -> List[Diary]:
         """
         Retrieve diaries filtered by user_id, diary_date, or diary_date range (since/until).
-        since/until are evaluated against diary_date, not created_at.
+        since/until are date-only and evaluated against diary_date, not created_at.
         At least one filter must be provided.
         """
         if not any([user_id, diary_date, since, until]):
             raise ValueError("At least one filter (user_id, diary_date, since, until) must be specified.")
-
-        since_date = since.date() if since else None
-        until_date = until.date() if until else None
 
         with self.get_db_cursor() as (cur, _):
             query_parts = ["SELECT created_at, user_id, diary_date, content, metadata FROM diaries"]
@@ -753,12 +750,12 @@ class ChatMemory:
             if diary_date is not None:
                 conditions.append("diary_date = %s")
                 params.append(diary_date)
-            if since_date is not None:
+            if since is not None:
                 conditions.append("diary_date >= %s")
-                params.append(since_date)
-            if until_date is not None:
+                params.append(since)
+            if until is not None:
                 conditions.append("diary_date <= %s")
-                params.append(until_date)
+                params.append(until)
 
             if conditions:
                 query_parts.append("WHERE " + " AND ".join(conditions))
@@ -1356,13 +1353,13 @@ class ChatMemory:
         def get_diary_endpoint(
             user_id: Optional[str] = Query(None),
             diary_date: Optional[datetime.date] = Query(None, description="Specific diary_date to fetch"),
-            since: Optional[datetime.datetime] = Query(None, description="Start datetime; compared against diary_date"),
-            until: Optional[datetime.datetime] = Query(None, description="End datetime; compared against diary_date"),
+            since: Optional[datetime.date] = Query(None, description="Start date; compared against diary_date"),
+            until: Optional[datetime.date] = Query(None, description="End date; compared against diary_date"),
             limit: int = Query(1000, description="Maximum number of diary entries to return"),
         ):
             """
             Retrieve diary entries filtered by user_id, diary_date, or diary_date range.
-            since/until are evaluated against diary_date (date), not created_at.
+            since/until are evaluated against diary_date (date), not created_at. Date-only inputs are required.
             """
             try:
                 diaries = self.get_diaries(
