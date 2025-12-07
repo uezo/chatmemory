@@ -301,6 +301,74 @@ def test_search_includes_diary(chat_memory, monkeypatch):
 
     chat_memory.delete_diary(user_id=user_id)
 
+def test_search_multi_user_ids(chat_memory, monkeypatch):
+    """search should accept multiple user_ids and OR across them."""
+    user_a = str(uuid.uuid4())
+    user_b = str(uuid.uuid4())
+    session_a = f"session_{uuid.uuid4()}"
+    session_b = f"session_{uuid.uuid4()}"
+
+    fake_embedding = [0.02] * chat_memory.embedding_dimension
+
+    async def fake_embed(text: str):
+        return fake_embedding
+
+    async def fake_llm(system_prompt: str, user_prompt: str):
+        return "multi user answer"
+
+    monkeypatch.setattr(chat_memory, "embed", fake_embed)
+    monkeypatch.setattr(chat_memory, "llm", fake_llm)
+
+    # Add one summary for each user
+    messages_a = [
+        HistoryMessage(role="user", content="User A loves pizza", metadata={}),
+        HistoryMessage(role="assistant", content="That sounds tasty", metadata={}),
+    ]
+    messages_b = [
+        HistoryMessage(role="user", content="User B likes pasta", metadata={}),
+        HistoryMessage(role="assistant", content="Great choice", metadata={}),
+    ]
+    chat_memory.add_history(user_a, session_a, messages_a)
+    chat_memory.add_history(user_b, session_b, messages_b)
+    asyncio.run(chat_memory.create_summary(user_a, session_a))
+    asyncio.run(chat_memory.create_summary(user_b, session_b))
+
+    # Add diaries per user to ensure diary search also accepts multiple IDs
+    today = datetime.date.today()
+    asyncio.run(
+        chat_memory.update_diary(
+            user_id=user_a,
+            diary_date=today,
+            content="User A diary about pizza",
+            metadata={},
+        )
+    )
+    asyncio.run(
+        chat_memory.update_diary(
+            user_id=user_b,
+            diary_date=today,
+            content="User B diary about pasta",
+            metadata={},
+        )
+    )
+
+    search_result = asyncio.run(
+        chat_memory.search([user_a, user_b], "pasta", top_k=2, search_content=False, include_retrieved_data=True)
+    )
+
+    assert search_result is not None
+    assert isinstance(search_result.answer, str)
+    assert search_result.retrieved_data is not None
+    assert "pasta" in search_result.retrieved_data or "User B" in search_result.retrieved_data
+
+    # Cleanup
+    chat_memory.delete_history(user_id=user_a, session_id=session_a)
+    chat_memory.delete_history(user_id=user_b, session_id=session_b)
+    chat_memory.delete_summaries(user_id=user_a, session_id=session_a)
+    chat_memory.delete_summaries(user_id=user_b, session_id=session_b)
+    chat_memory.delete_diary(user_id=user_a)
+    chat_memory.delete_diary(user_id=user_b)
+
 def test_diary_crud(chat_memory):
     """Diary add/get/update/delete, with since/until filtering on diary_date."""
     user_id = str(uuid.uuid4())

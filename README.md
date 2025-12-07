@@ -94,6 +94,8 @@ Below is a complete Python sample demonstrating how to interact with the ChatMem
 
 Search looks at summary embeddings and knowledge embeddings first, and also includes diary embeddings. If these are insufficient, it falls back to detailed history.
 
+You can pass one user_id or a list of user_ids to search across both a specific user and shared/system-wide memory in a single call.
+
 ```python
 import requests
 import time

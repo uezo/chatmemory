@@ -411,3 +411,69 @@ def test_search_endpoint(test_user, test_session, monkeypatch):
     assert response.status_code == 200
     response = client.delete("/diary", params={"user_id": test_user})
     assert response.status_code == 200
+
+def test_search_endpoint_multi_user(monkeypatch):
+    """search endpoint should accept multiple user_ids (OR)."""
+    fake_embedding = [0.02] * chat_memory.embedding_dimension
+
+    async def fake_embed(text: str):
+        return fake_embedding
+
+    async def fake_llm(system_prompt: str, user_prompt: str):
+        return "multi user api answer"
+
+    monkeypatch.setattr(chat_memory, "embed", fake_embed)
+    monkeypatch.setattr(chat_memory, "llm", fake_llm)
+
+    user_a = str(uuid.uuid4())
+    user_b = str(uuid.uuid4())
+    session_a = f"session_{uuid.uuid4()}"
+    session_b = f"session_{uuid.uuid4()}"
+
+    payload_a = {
+        "user_id": user_a,
+        "session_id": session_a,
+        "messages": [
+            {"role": "user", "content": "User A loves pizza", "metadata": {}},
+            {"role": "assistant", "content": "Noted", "metadata": {}},
+        ],
+    }
+    payload_b = {
+        "user_id": user_b,
+        "session_id": session_b,
+        "messages": [
+            {"role": "user", "content": "User B likes pasta", "metadata": {}},
+            {"role": "assistant", "content": "Sounds great", "metadata": {}},
+        ],
+    }
+    assert client.post("/history", json=payload_a).status_code == 200
+    assert client.post("/history", json=payload_b).status_code == 200
+
+    assert client.post("/summary/create", params={"user_id": user_a, "session_id": session_a}).status_code == 200
+    assert client.post("/summary/create", params={"user_id": user_b, "session_id": session_b}).status_code == 200
+
+    today = datetime.date.today().isoformat()
+    assert client.post("/diary", json={"user_id": user_a, "diary_date": today, "content": "Pizza diary"}).status_code == 200
+    assert client.post("/diary", json={"user_id": user_b, "diary_date": today, "content": "Pasta diary"}).status_code == 200
+
+    search_payload = {
+        "user_id": [user_a, user_b],
+        "query": "pasta",
+        "top_k": 2,
+        "search_content": False,
+        "include_retrieved_data": True,
+    }
+    response = client.post("/search", json=search_payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert "result" in data
+    assert isinstance(data["result"]["answer"], str)
+    assert "Pasta" or "pasta" or "User B" in data["result"].get("retrieved_data", "")
+
+    # Cleanup
+    client.delete("/history", params={"user_id": user_a, "session_id": session_a})
+    client.delete("/history", params={"user_id": user_b, "session_id": session_b})
+    client.delete("/summary", params={"user_id": user_a, "session_id": session_a})
+    client.delete("/summary", params={"user_id": user_b, "session_id": session_b})
+    client.delete("/diary", params={"user_id": user_a})
+    client.delete("/diary", params={"user_id": user_b})

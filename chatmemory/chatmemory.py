@@ -3,7 +3,7 @@ import json
 import logging
 from contextlib import contextmanager
 from time import sleep
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel
 import psycopg2
@@ -95,7 +95,7 @@ class GetKnowledgeResponse(BaseModel):
     knowledge: List[KnowledgeWithIds]
 
 class SearchRequest(BaseModel):
-    user_id: str
+    user_id: Union[str, List[str]]
     query: str
     top_k: int = 5
     search_content: bool = False
@@ -847,53 +847,69 @@ class ChatMemory:
             log_message += f" on {diary_date}"
         logger.info(log_message + ".")
 
-    def search_summary(self, cur, user_id: str, query_embedding_str: str, top_k: int) -> List[SessionSummary]:
+    def search_summary(self, cur, user_id: Union[str, List[str]], query_embedding_str: str, top_k: int) -> List[SessionSummary]:
         """
         Search for conversation summaries using vector similarity.
+        Accepts a single user_id or a list of user_ids (OR condition).
         """
+        user_ids = [user_id] if isinstance(user_id, str) else list(user_id or [])
+        if not user_ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(user_ids))
         cur.execute(
-            """
+            f"""
             SELECT session_id, summary, created_at
             FROM conversation_summaries
-            WHERE user_id = %s
+            WHERE user_id IN ({placeholders})
             ORDER BY embedding_summary <-> %s::vector
             LIMIT %s
             """,
-            (user_id, query_embedding_str, top_k),
+            (*user_ids, query_embedding_str, top_k),
         )
         rows = cur.fetchall()
         return [SessionSummary(created_at=row[2], session_id=row[0], summary=row[1]) for row in rows]
 
-    def search_knowledge(self, cur, user_id: str, query_embedding_str: str, top_k: int) -> List[Knowledge]:
+    def search_knowledge(self, cur, user_id: Union[str, List[str]], query_embedding_str: str, top_k: int) -> List[Knowledge]:
         """
         Search for user knowledge records using vector similarity.
+        Accepts a single user_id or a list of user_ids (OR condition).
         """
+        user_ids = [user_id] if isinstance(user_id, str) else list(user_id or [])
+        if not user_ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(user_ids))
         cur.execute(
-            """
+            f"""
             SELECT created_at, knowledge
             FROM user_knowledge
-            WHERE user_id = %s
+            WHERE user_id IN ({placeholders})
             ORDER BY embedding <-> %s::vector
             LIMIT %s
             """,
-            (user_id, query_embedding_str, top_k),
+            (*user_ids, query_embedding_str, top_k),
         )
         rows = cur.fetchall()
         return [Knowledge(created_at=row[0], knowledge=row[1]) for row in rows]
 
-    def search_diary(self, cur, user_id: str, query_embedding_str: str, top_k: int) -> List[Diary]:
+    def search_diary(self, cur, user_id: Union[str, List[str]], query_embedding_str: str, top_k: int) -> List[Diary]:
         """
         Search diary records using vector similarity against diary embeddings.
+        Accepts a single user_id or a list of user_ids (OR condition).
         """
+        user_ids = [user_id] if isinstance(user_id, str) else list(user_id or [])
+        if not user_ids:
+            return []
+
+        placeholders = ", ".join(["%s"] * len(user_ids))
         cur.execute(
-            """
+            f"""
             SELECT created_at, user_id, diary_date, content, metadata
             FROM diaries
-            WHERE user_id = %s
+            WHERE user_id IN ({placeholders})
             ORDER BY embedding <-> %s::vector
             LIMIT %s
             """,
-            (user_id, query_embedding_str, top_k),
+            (*user_ids, query_embedding_str, top_k),
         )
         rows = cur.fetchall()
         return [
@@ -907,20 +923,26 @@ class ChatMemory:
             for row in rows
         ]
 
-    def search_content(self, conn, user_id: str, query_embedding_str: str, top_k: int) -> Dict[str, List[HistoryMessage]]:
+    def search_content(self, conn, user_id: Union[str, List[str]], query_embedding_str: str, top_k: int) -> Dict[str, List[HistoryMessage]]:
         """
         Search conversation histories based on summaries.
+        Accepts a single user_id or a list of user_ids (OR condition).
         """
+        user_ids = [user_id] if isinstance(user_id, str) else list(user_id or [])
+        if not user_ids:
+            return {}
+
+        placeholders = ", ".join(["%s"] * len(user_ids))
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT session_id
                 FROM conversation_summaries
-                WHERE user_id = %s
+                WHERE user_id IN ({placeholders})
                 ORDER BY embedding_summary <-> %s::vector
                 LIMIT %s
                 """,
-                (user_id, query_embedding_str, top_k),
+                (*user_ids, query_embedding_str, top_k),
             )
             session_ids = [r[0] for r in cur.fetchall()]
 
@@ -941,7 +963,7 @@ class ChatMemory:
                 session_messages[session_id] = [HistoryMessage(created_at=r[0], role=r[1], content=r[2], channel=r[3]) for r in rows]
         return session_messages
 
-    async def search(self, user_id: str, query: str, top_k: int = 5, search_content: bool = False, include_retrieved_data: bool = False) -> SearchResult:
+    async def search(self, user_id: Union[str, List[str]], query: str, top_k: int = 5, search_content: bool = False, include_retrieved_data: bool = False) -> SearchResult:
         """
         Search conversation summaries and user knowledge based on a query,
         and generate an answer using the LLM.
@@ -1251,7 +1273,7 @@ class ChatMemory:
                 raise HTTPException(status_code=500, detail=str(ex))
 
         # ----- Search Endpoint -----
-        @router.post("/search", response_model=SearchResponse, summary="Search conversation summaries and user knowledge, and generate answer", tags=["Search"])
+        @router.post("/search", response_model=SearchResponse, summary="Search conversation summaries, knowledge, diaries, and generate answer", tags=["Search"])
         async def search_endpoint(request: SearchRequest):
             """
             Search both conversation summaries and user knowledge for similar records,
