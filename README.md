@@ -156,7 +156,11 @@ search_payload = {
     "query": query,
     "top_k": 3,
     "search_content": True,
-    "include_retrieved_data": True
+    "include_retrieved_data": True,
+    # Optional date-only window to scope summaries/knowledge/diaries:
+    # "since": "2025-02-20",
+    # "until": "2025-02-25",
+    # "utc_offset_hours": 9,  # JST local day window
 }
 
 response = requests.post(f"{BASE_URL}/search", json=search_payload)
@@ -251,10 +255,11 @@ response = requests.delete(f"{BASE_URL}/history", params=params)
 
 ## 📅 Time filtering (`since` / `until`)
 
-You can scope data retrieval by time windows. Pass ISO 8601 datetimes; the server handles them differently per resource:
+You can scope data retrieval by time windows. Each resource handles filters slightly differently:
 
-- **History (`/history` GET):** `since` / `until` are compared to each message `created_at` (UTC). Combine with `user_id`, `session_id`, and `channel` as needed.
-- **Diary (`/diary` GET):** `since` / `until` are compared to the date-only `diary_date` (the date portion of your input is used).
+- **History (`/history` GET):** `since` / `until` are ISO datetimes compared to each message `created_at` (UTC). Combine with `user_id`, `session_id`, and `channel` as needed.
+- **Diary (`/diary` GET):** `since` / `until` are ISO datetimes, but only the date portion is used to compare against `diary_date`.
+- **Search (`/search` POST):** `since` / `until` are **date-only** strings (`YYYY-MM-DD`). They’re evaluated as a window from local midnight to the next midnight using `utc_offset_hours` (e.g., JST = `+9`). Summaries/knowledge filter by `created_at` in that UTC-shifted window; diaries filter by the corresponding local-day window.
 
 Example: last hour of history for one session/channel
 
@@ -279,6 +284,20 @@ params = {
     "limit": 50,
 }
 requests.get(f"{BASE_URL}/diary", params=params)
+```
+
+Example: limit search to recent data only (date-only + offset)
+
+```python
+payload = {
+    "user_id": "user123",
+    "query": "What projects are we on?",
+    "since": "2025-02-20",          # date-only
+    "until": "2025-02-25",          # optional
+    "utc_offset_hours": 9,          # JST local day window
+    "include_retrieved_data": True,
+}
+requests.post(f"{BASE_URL}/search", json=payload)
 ```
 
 ## 📔 Diary entries

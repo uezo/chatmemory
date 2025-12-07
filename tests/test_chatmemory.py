@@ -369,6 +369,119 @@ def test_search_multi_user_ids(chat_memory, monkeypatch):
     chat_memory.delete_diary(user_id=user_a)
     chat_memory.delete_diary(user_id=user_b)
 
+def test_search_respects_time_window(chat_memory, monkeypatch):
+    """search should filter summaries/knowledge/diaries by since/until."""
+    user_id = str(uuid.uuid4())
+    old_session = f"session_{uuid.uuid4()}"
+    new_session = f"session_{uuid.uuid4()}"
+    old_time = datetime.datetime.utcnow() - datetime.timedelta(days=2)
+    since_time = datetime.datetime.utcnow() - datetime.timedelta(days=1)
+
+    fake_embedding = [0.05] * chat_memory.embedding_dimension
+
+    async def fake_embed(text: str):
+        return fake_embedding
+
+    async def fake_llm(system_prompt: str, user_prompt: str):
+        # Echo a snippet so summaries differ between sessions.
+        return f"summary:{user_prompt[:40]}"
+
+    monkeypatch.setattr(chat_memory, "embed", fake_embed)
+    monkeypatch.setattr(chat_memory, "llm", fake_llm)
+
+    # Old session data.
+    chat_memory.add_history(
+        user_id,
+        old_session,
+        [
+            HistoryMessage(created_at=old_time, role="user", content="Old session about dinosaurs", metadata={}),
+            HistoryMessage(created_at=old_time, role="assistant", content="Got it", metadata={}),
+        ],
+    )
+    # Newer session data.
+    chat_memory.add_history(
+        user_id,
+        new_session,
+        [
+            HistoryMessage(role="user", content="New session about robotics", metadata={}),
+            HistoryMessage(role="assistant", content="Noted", metadata={}),
+        ],
+    )
+
+    asyncio.run(chat_memory.create_summary(user_id, old_session))
+    asyncio.run(chat_memory.create_summary(user_id, new_session))
+
+    # Set the old summary created_at to an older timestamp for filtering.
+    with chat_memory.get_db_cursor() as (cur, _):
+        cur.execute(
+            """
+            UPDATE conversation_summaries
+            SET created_at = %s
+            WHERE user_id = %s AND session_id = %s
+            """,
+            (old_time, user_id, old_session),
+        )
+
+    # Knowledge entries: one old, one new.
+    asyncio.run(chat_memory.add_knowledge(user_id, "Legacy fact about dinosaurs"))
+    asyncio.run(chat_memory.add_knowledge(user_id, "Recent fact about robotics"))
+    with chat_memory.get_db_cursor() as (cur, _):
+        cur.execute(
+            """
+            UPDATE user_knowledge
+            SET created_at = %s
+            WHERE user_id = %s AND knowledge = %s
+            """,
+            (old_time, user_id, "Legacy fact about dinosaurs"),
+        )
+
+    # Diary entries on different dates.
+    asyncio.run(
+        chat_memory.update_diary(
+            user_id=user_id,
+            diary_date=old_time.date(),
+            content="Old diary about dinosaurs",
+            metadata={},
+        )
+    )
+    asyncio.run(
+        chat_memory.update_diary(
+            user_id=user_id,
+            diary_date=datetime.date.today(),
+            content="New diary about robotics",
+            metadata={},
+        )
+    )
+
+    search_result = asyncio.run(
+        chat_memory.search(
+            user_id,
+            "technology",
+            top_k=5,
+            search_content=False,
+            include_retrieved_data=True,
+            since=since_time.date(),
+            utc_offset_hours=0,
+        )
+    )
+
+    assert search_result.retrieved_data is not None
+    retrieved = search_result.retrieved_data
+    assert "robotics" in retrieved
+    assert "Recent fact about robotics" in retrieved
+    assert "New diary about robotics" in retrieved
+    assert "dinosaurs" not in retrieved
+    assert "Legacy fact about dinosaurs" not in retrieved
+    assert "Old diary about dinosaurs" not in retrieved
+
+    # Cleanup
+    chat_memory.delete_history(user_id=user_id, session_id=old_session)
+    chat_memory.delete_history(user_id=user_id, session_id=new_session)
+    chat_memory.delete_summaries(user_id=user_id, session_id=old_session)
+    chat_memory.delete_summaries(user_id=user_id, session_id=new_session)
+    chat_memory.delete_knowledge(user_id=user_id)
+    chat_memory.delete_diary(user_id=user_id)
+
 def test_diary_crud(chat_memory):
     """Diary add/get/update/delete, with since/until filtering on diary_date."""
     user_id = str(uuid.uuid4())

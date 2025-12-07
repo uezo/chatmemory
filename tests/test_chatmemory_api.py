@@ -412,6 +412,89 @@ def test_search_endpoint(test_user, test_session, monkeypatch):
     response = client.delete("/diary", params={"user_id": test_user})
     assert response.status_code == 200
 
+def test_search_endpoint_since_until(monkeypatch):
+    """Ensure /search respects since/until filters."""
+    fake_embedding = [0.03] * chat_memory.embedding_dimension
+
+    async def fake_embed(text: str):
+        return fake_embedding
+
+    async def fake_llm(system_prompt: str, user_prompt: str):
+        return f"api:{user_prompt[:30]}"
+
+    monkeypatch.setattr(chat_memory, "embed", fake_embed)
+    monkeypatch.setattr(chat_memory, "llm", fake_llm)
+
+    user_id = str(uuid.uuid4())
+    old_session = f"session_{uuid.uuid4()}"
+    new_session = f"session_{uuid.uuid4()}"
+    old_time = datetime.datetime.utcnow() - datetime.timedelta(days=3)
+    since_time = datetime.datetime.utcnow() - datetime.timedelta(days=1)
+
+    # Old session with backdated created_at.
+    old_payload = {
+        "user_id": user_id,
+        "session_id": old_session,
+        "messages": [
+            {"created_at": old_time.isoformat(), "role": "user", "content": "Old session about sailing", "metadata": {}},
+            {"created_at": old_time.isoformat(), "role": "assistant", "content": "Understood", "metadata": {}},
+        ],
+    }
+    assert client.post("/history", json=old_payload).status_code == 200
+
+    # Newer session.
+    new_payload = {
+        "user_id": user_id,
+        "session_id": new_session,
+        "messages": [
+            {"role": "user", "content": "New session about AI robotics", "metadata": {}},
+            {"role": "assistant", "content": "Got it", "metadata": {}},
+        ],
+    }
+    assert client.post("/history", json=new_payload).status_code == 200
+
+    assert client.post("/summary/create", params={"user_id": user_id, "session_id": old_session}).status_code == 200
+    assert client.post("/summary/create", params={"user_id": user_id, "session_id": new_session}).status_code == 200
+
+    # Backdate old summary to ensure filtering removes it.
+    with chat_memory.get_db_cursor() as (cur, _):
+        cur.execute(
+            """
+            UPDATE conversation_summaries
+            SET created_at = %s
+            WHERE user_id = %s AND session_id = %s
+            """,
+            (old_time, user_id, old_session),
+        )
+
+    # Diary entries.
+    old_diary_date = old_time.date().isoformat()
+    today = datetime.date.today().isoformat()
+    assert client.post("/diary", json={"user_id": user_id, "diary_date": old_diary_date, "content": "Old diary about sailing"}).status_code == 200
+    assert client.post("/diary", json={"user_id": user_id, "diary_date": today, "content": "New diary about robotics"}).status_code == 200
+
+    search_payload = {
+        "user_id": user_id,
+        "query": "robotics context",
+        "since": since_time.date().isoformat(),
+        "include_retrieved_data": True,
+        "utc_offset_hours": 0,
+    }
+    response = client.post("/search", json=search_payload)
+    assert response.status_code == 200
+    data = response.json()
+    retrieved = data["result"].get("retrieved_data", "")
+    assert "robotics" in retrieved
+    assert "Old session about sailing" not in retrieved
+    assert "Old diary about sailing" not in retrieved
+
+    # Cleanup
+    client.delete("/history", params={"user_id": user_id, "session_id": old_session})
+    client.delete("/history", params={"user_id": user_id, "session_id": new_session})
+    client.delete("/summary", params={"user_id": user_id, "session_id": old_session})
+    client.delete("/summary", params={"user_id": user_id, "session_id": new_session})
+    client.delete("/diary", params={"user_id": user_id})
+
 def test_search_endpoint_multi_user(monkeypatch):
     """search endpoint should accept multiple user_ids (OR)."""
     fake_embedding = [0.02] * chat_memory.embedding_dimension

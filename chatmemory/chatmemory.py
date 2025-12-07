@@ -100,6 +100,10 @@ class SearchRequest(BaseModel):
     top_k: int = 5
     search_content: bool = False
     include_retrieved_data: bool = False
+    # Date-only filters; evaluated as local-midnight windows shifted by time_offset_minutes.
+    since: Optional[datetime.date] = None
+    until: Optional[datetime.date] = None
+    utc_offset_hours: float = 0.0
 
 class SearchResponse(BaseModel):
     result: SearchResult
@@ -847,7 +851,15 @@ class ChatMemory:
             log_message += f" on {diary_date}"
         logger.info(log_message + ".")
 
-    def search_summary(self, cur, user_id: Union[str, List[str]], query_embedding_str: str, top_k: int) -> List[SessionSummary]:
+    def search_summary(
+        self,
+        cur,
+        user_id: Union[str, List[str]],
+        query_embedding_str: str,
+        top_k: int,
+        since: Optional[datetime.datetime] = None,
+        until: Optional[datetime.datetime] = None,
+    ) -> List[SessionSummary]:
         """
         Search for conversation summaries using vector similarity.
         Accepts a single user_id or a list of user_ids (OR condition).
@@ -856,20 +868,39 @@ class ChatMemory:
         if not user_ids:
             return []
         placeholders = ", ".join(["%s"] * len(user_ids))
+        conditions = [f"user_id IN ({placeholders})"]
+        params = list(user_ids)
+
+        if since:
+            conditions.append("created_at >= %s")
+            params.append(since)
+        if until:
+            conditions.append("created_at < %s")
+            params.append(until)
+
+        where_clause = " AND ".join(conditions)
         cur.execute(
             f"""
             SELECT session_id, summary, created_at
             FROM conversation_summaries
-            WHERE user_id IN ({placeholders})
+            WHERE {where_clause}
             ORDER BY embedding_summary <-> %s::vector
             LIMIT %s
             """,
-            (*user_ids, query_embedding_str, top_k),
+            (*params, query_embedding_str, top_k),
         )
         rows = cur.fetchall()
         return [SessionSummary(created_at=row[2], session_id=row[0], summary=row[1]) for row in rows]
 
-    def search_knowledge(self, cur, user_id: Union[str, List[str]], query_embedding_str: str, top_k: int) -> List[Knowledge]:
+    def search_knowledge(
+        self,
+        cur,
+        user_id: Union[str, List[str]],
+        query_embedding_str: str,
+        top_k: int,
+        since: Optional[datetime.datetime] = None,
+        until: Optional[datetime.datetime] = None,
+    ) -> List[Knowledge]:
         """
         Search for user knowledge records using vector similarity.
         Accepts a single user_id or a list of user_ids (OR condition).
@@ -878,20 +909,39 @@ class ChatMemory:
         if not user_ids:
             return []
         placeholders = ", ".join(["%s"] * len(user_ids))
+        conditions = [f"user_id IN ({placeholders})"]
+        params = list(user_ids)
+
+        if since:
+            conditions.append("created_at >= %s")
+            params.append(since)
+        if until:
+            conditions.append("created_at < %s")
+            params.append(until)
+
+        where_clause = " AND ".join(conditions)
         cur.execute(
             f"""
             SELECT created_at, knowledge
             FROM user_knowledge
-            WHERE user_id IN ({placeholders})
+            WHERE {where_clause}
             ORDER BY embedding <-> %s::vector
             LIMIT %s
             """,
-            (*user_ids, query_embedding_str, top_k),
+            (*params, query_embedding_str, top_k),
         )
         rows = cur.fetchall()
         return [Knowledge(created_at=row[0], knowledge=row[1]) for row in rows]
 
-    def search_diary(self, cur, user_id: Union[str, List[str]], query_embedding_str: str, top_k: int) -> List[Diary]:
+    def search_diary(
+        self,
+        cur,
+        user_id: Union[str, List[str]],
+        query_embedding_str: str,
+        top_k: int,
+        since: Optional[datetime.date] = None,
+        until_exclusive: Optional[datetime.date] = None,
+    ) -> List[Diary]:
         """
         Search diary records using vector similarity against diary embeddings.
         Accepts a single user_id or a list of user_ids (OR condition).
@@ -901,15 +951,27 @@ class ChatMemory:
             return []
 
         placeholders = ", ".join(["%s"] * len(user_ids))
+
+        conditions = [f"user_id IN ({placeholders})"]
+        params = list(user_ids)
+
+        if since is not None:
+            conditions.append("diary_date >= %s")
+            params.append(since)
+        if until_exclusive is not None:
+            conditions.append("diary_date < %s")
+            params.append(until_exclusive)
+
+        where_clause = " AND ".join(conditions)
         cur.execute(
             f"""
             SELECT created_at, user_id, diary_date, content, metadata
             FROM diaries
-            WHERE user_id IN ({placeholders})
+            WHERE {where_clause}
             ORDER BY embedding <-> %s::vector
             LIMIT %s
             """,
-            (*user_ids, query_embedding_str, top_k),
+            (*params, query_embedding_str, top_k),
         )
         rows = cur.fetchall()
         return [
@@ -923,7 +985,15 @@ class ChatMemory:
             for row in rows
         ]
 
-    def search_content(self, conn, user_id: Union[str, List[str]], query_embedding_str: str, top_k: int) -> Dict[str, List[HistoryMessage]]:
+    def search_content(
+        self,
+        conn,
+        user_id: Union[str, List[str]],
+        query_embedding_str: str,
+        top_k: int,
+        since: Optional[datetime.datetime] = None,
+        until: Optional[datetime.datetime] = None,
+    ) -> Dict[str, List[HistoryMessage]]:
         """
         Search conversation histories based on summaries.
         Accepts a single user_id or a list of user_ids (OR condition).
@@ -933,16 +1003,27 @@ class ChatMemory:
             return {}
 
         placeholders = ", ".join(["%s"] * len(user_ids))
+        conditions = [f"user_id IN ({placeholders})"]
+        params = list(user_ids)
+
+        if since:
+            conditions.append("created_at >= %s")
+            params.append(since)
+        if until:
+            conditions.append("created_at < %s")
+            params.append(until)
+
+        where_clause = " AND ".join(conditions)
         with conn.cursor() as cur:
             cur.execute(
                 f"""
                 SELECT session_id
                 FROM conversation_summaries
-                WHERE user_id IN ({placeholders})
+                WHERE {where_clause}
                 ORDER BY embedding_summary <-> %s::vector
                 LIMIT %s
                 """,
-                (*user_ids, query_embedding_str, top_k),
+                (*params, query_embedding_str, top_k),
             )
             session_ids = [r[0] for r in cur.fetchall()]
 
@@ -963,26 +1044,68 @@ class ChatMemory:
                 session_messages[session_id] = [HistoryMessage(created_at=r[0], role=r[1], content=r[2], channel=r[3]) for r in rows]
         return session_messages
 
-    async def search(self, user_id: Union[str, List[str]], query: str, top_k: int = 5, search_content: bool = False, include_retrieved_data: bool = False) -> SearchResult:
+    def _compute_search_bounds(
+        self,
+        since: Optional[datetime.date],
+        until: Optional[datetime.date],
+        offset_hours: float,
+    ):
+        """
+        Convert date-only filters into UTC start/end datetimes and diary date bounds.
+        start = since 00:00:00 local -> minus offset -> UTC
+        end   = (until+1d) 00:00:00 local -> minus offset -> UTC (exclusive)
+        Diary filters use the corresponding local-date window: [since_local, until_local_exclusive).
+        """
+        offset = datetime.timedelta(hours=offset_hours or 0)
+        start_utc = (
+            datetime.datetime.combine(since, datetime.time.min) - offset if since else None
+        )
+        end_utc = (
+            datetime.datetime.combine(until + datetime.timedelta(days=1), datetime.time.min) - offset
+            if until
+            else None
+        )
+        diary_since = (start_utc + offset).date() if start_utc else None
+        diary_until = (end_utc + offset).date() if end_utc else None
+        return start_utc, end_utc, diary_since, diary_until
+
+    async def search(
+        self,
+        user_id: Union[str, List[str]],
+        query: str,
+        top_k: int = 5,
+        search_content: bool = False,
+        include_retrieved_data: bool = False,
+        since: Optional[datetime.date] = None,
+        until: Optional[datetime.date] = None,
+        utc_offset_hours: float = 0.0,
+    ) -> SearchResult:
         """
         Search conversation summaries and user knowledge based on a query,
         and generate an answer using the LLM.
+        since/until are date-only; they are evaluated as UTC midnight…(until+1d) midnight,
+        shifted by utc_offset_hours (e.g., JST = +9).
+        Diary filters use the corresponding local-date window.
         """
         query_embedding = await self.embed(query)
         vector_str = "[" + ",".join(map(str, query_embedding)) + "]"
 
+        start_utc, end_utc, diary_since, diary_until = self._compute_search_bounds(
+            since, until, utc_offset_hours
+        )
+
         with self.get_db_cursor() as (cur, conn):
-            summaries = self.search_summary(cur, user_id, vector_str, top_k)
+            summaries = self.search_summary(cur, user_id, vector_str, top_k, start_utc, end_utc)
             summaries_text = "\n".join(
                 [f"Conversation summary ({s.created_at}): {s.summary}" for s in summaries]
             ) if summaries else ""
 
-            knowledges = self.search_knowledge(cur, user_id, vector_str, top_k)
+            knowledges = self.search_knowledge(cur, user_id, vector_str, top_k, start_utc, end_utc)
             knowledges_text = "\n".join(
                 [f"Knowledge about user ({k.created_at}): {k.knowledge}" for k in knowledges]
             ) if knowledges else ""
 
-            diaries = self.search_diary(cur, user_id, vector_str, top_k)
+            diaries = self.search_diary(cur, user_id, vector_str, top_k, diary_since, diary_until)
             diaries_text = "\n".join(
                 [f"Diary ({d.diary_date}): {d.content}" for d in diaries]
             ) if diaries else ""
@@ -1009,7 +1132,7 @@ class ChatMemory:
                 logger.info("No summaries or knowledge found; proceeding to search conversation content.")
 
             # Fallback: search conversation history content
-            content_data = self.search_content(conn, user_id, vector_str, top_k)
+            content_data = self.search_content(conn, user_id, vector_str, top_k, start_utc, end_utc)
             content_retrieved = "====\n"
             for session_id, messages in content_data.items():
                 if messages:
@@ -1281,7 +1404,14 @@ class ChatMemory:
             """
             try:
                 result = await self.search(
-                    request.user_id, request.query, request.top_k, request.search_content, request.include_retrieved_data
+                    user_id=request.user_id,
+                    query=request.query,
+                    top_k=request.top_k,
+                    search_content=request.search_content,
+                    include_retrieved_data=request.include_retrieved_data,
+                    since=request.since,
+                    until=request.until,
+                    utc_offset_hours=request.utc_offset_hours,
                 )
                 return SearchResponse(result=result)
             except Exception as ex:
