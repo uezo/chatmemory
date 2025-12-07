@@ -397,7 +397,7 @@ class ChatMemory:
                 conditions.append("created_at >= %s")
                 params.append(since)
             if until:
-                conditions.append("created_at <= %s")
+                conditions.append("created_at < %s")
                 params.append(until)
             if not since and not until and within_seconds and within_seconds > 0:
                 conditions.append("created_at >= NOW() - INTERVAL '1 second' * %s")
@@ -1051,7 +1051,6 @@ class ChatMemory:
         Convert date-only filters into UTC start/end datetimes and diary date bounds.
         start = since 00:00:00 local -> minus offset -> UTC
         end   = (until+1d) 00:00:00 local -> minus offset -> UTC (exclusive)
-        Diary filters use the corresponding local-date window: [since_local, until_local_exclusive).
         """
         offset = datetime.timedelta(hours=offset_hours or 0)
         start_utc = (
@@ -1062,9 +1061,7 @@ class ChatMemory:
             if until
             else None
         )
-        diary_since = (start_utc + offset).date() if start_utc else None
-        diary_until = (end_utc + offset).date() if end_utc else None
-        return start_utc, end_utc, diary_since, diary_until
+        return start_utc, end_utc
 
     async def search(
         self,
@@ -1087,9 +1084,8 @@ class ChatMemory:
         query_embedding = await self.embed(query)
         vector_str = "[" + ",".join(map(str, query_embedding)) + "]"
 
-        start_utc, end_utc, diary_since, diary_until = self._compute_search_bounds(
-            since, until, utc_offset_hours
-        )
+        start_utc, end_utc = self._compute_search_bounds(since, until, utc_offset_hours)
+        diary_until_exclusive = until + datetime.timedelta(days=1) if until else None
 
         with self.get_db_cursor() as (cur, conn):
             summaries = self.search_summary(cur, user_id, vector_str, top_k, start_utc, end_utc)
@@ -1102,7 +1098,7 @@ class ChatMemory:
                 [f"Knowledge about user ({k.created_at}): {k.knowledge}" for k in knowledges]
             ) if knowledges else ""
 
-            diaries = self.search_diary(cur, user_id, vector_str, top_k, diary_since, diary_until)
+            diaries = self.search_diary(cur, user_id, vector_str, top_k, since, diary_until_exclusive)
             diaries_text = "\n".join(
                 [f"Diary ({d.diary_date}): {d.content}" for d in diaries]
             ) if diaries else ""

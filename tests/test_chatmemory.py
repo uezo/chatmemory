@@ -60,6 +60,11 @@ def test_add_and_get_history(chat_memory):
     # All messages should be returned with within_seconds=0 (unlimited)
     history_all = chat_memory.get_history(user_id=user_id, session_id=session_id, within_seconds=0)
     assert len(history_all) == len(messages) + 1
+    # until should be exclusive
+    latest_created = history_all[-1].created_at
+    history_until = chat_memory.get_history(user_id=user_id, session_id=session_id, until=latest_created)
+    assert all(h.created_at < latest_created for h in history_until)
+    assert len(history_until) == len(messages)  # latest message excluded
     # Cleanup: delete history
     chat_memory.delete_history(user_id=user_id, session_id=session_id)
     history_after = chat_memory.get_history(user_id=user_id, session_id=session_id)
@@ -479,6 +484,202 @@ def test_search_respects_time_window(chat_memory, monkeypatch):
     chat_memory.delete_history(user_id=user_id, session_id=new_session)
     chat_memory.delete_summaries(user_id=user_id, session_id=old_session)
     chat_memory.delete_summaries(user_id=user_id, session_id=new_session)
+    chat_memory.delete_knowledge(user_id=user_id)
+    chat_memory.delete_diary(user_id=user_id)
+
+def test_search_until_exclusive(chat_memory, monkeypatch):
+    """until date should exclude records exactly at the upper bound."""
+    user_id = str(uuid.uuid4())
+    keep_session = f"session_{uuid.uuid4()}"
+    drop_session = f"session_{uuid.uuid4()}"
+    until_date = datetime.date(2025, 1, 1)
+    boundary = datetime.datetime(2025, 1, 2, 0, 0, 0)  # until_date + 1d midnight
+    fake_embedding = [0.06] * chat_memory.embedding_dimension
+
+    async def fake_embed(text: str):
+        return fake_embedding
+
+    async def fake_llm(system_prompt: str, user_prompt: str):
+        return "until-exclusive-answer"
+
+    monkeypatch.setattr(chat_memory, "embed", fake_embed)
+    monkeypatch.setattr(chat_memory, "llm", fake_llm)
+
+    # Add histories for two sessions.
+    chat_memory.add_history(
+        user_id,
+        keep_session,
+        [HistoryMessage(role="user", content="keep summary content", metadata={})],
+    )
+    chat_memory.add_history(
+        user_id,
+        drop_session,
+        [HistoryMessage(role="user", content="drop summary content", metadata={})],
+    )
+
+    asyncio.run(chat_memory.create_summary(user_id, keep_session))
+    asyncio.run(chat_memory.create_summary(user_id, drop_session))
+
+    # Set created_at to control filtering (boundary should be excluded).
+    with chat_memory.get_db_cursor() as (cur, _):
+        cur.execute(
+            """
+            UPDATE conversation_summaries
+            SET created_at = %s, summary = %s
+            WHERE user_id = %s AND session_id = %s
+            """,
+            (datetime.datetime(2024, 12, 31, 23, 0, 0), "keep summary content", user_id, keep_session),
+        )
+        cur.execute(
+            """
+            UPDATE conversation_summaries
+            SET created_at = %s, summary = %s
+            WHERE user_id = %s AND session_id = %s
+            """,
+            (boundary, "drop summary content", user_id, drop_session),
+        )
+
+    search_result = asyncio.run(
+        chat_memory.search(
+            user_id,
+            "summary",
+            top_k=5,
+            search_content=False,
+            include_retrieved_data=True,
+            until=until_date,
+            utc_offset_hours=0,
+        )
+    )
+
+    assert search_result.retrieved_data is not None
+    retrieved = search_result.retrieved_data
+    assert "keep summary content" in retrieved
+    assert "drop summary content" not in retrieved
+
+    # Cleanup
+    chat_memory.delete_history(user_id=user_id, session_id=keep_session)
+    chat_memory.delete_history(user_id=user_id, session_id=drop_session)
+    chat_memory.delete_summaries(user_id=user_id, session_id=keep_session)
+    chat_memory.delete_summaries(user_id=user_id, session_id=drop_session)
+
+def test_search_offset_jst_midnight_window(chat_memory, monkeypatch):
+    """utc_offset_hours should shift date window; JST midnight should include previous UTC day."""
+    user_id = str(uuid.uuid4())
+    session_in_window = f"session_{uuid.uuid4()}"
+    session_outside = f"session_{uuid.uuid4()}"
+    # JST 2025-02-07 08:00 == UTC 2025-02-06 23:00
+    utc_time_in = datetime.datetime(2025, 2, 6, 23, 0, 0)
+    utc_time_out = datetime.datetime(2025, 2, 5, 12, 0, 0)
+    fake_embedding = [0.07] * chat_memory.embedding_dimension
+
+    async def fake_embed(text: str):
+        return fake_embedding
+
+    async def fake_llm(system_prompt: str, user_prompt: str):
+        return "offset-window-answer"
+
+    monkeypatch.setattr(chat_memory, "embed", fake_embed)
+    monkeypatch.setattr(chat_memory, "llm", fake_llm)
+
+    chat_memory.add_history(
+        user_id,
+        session_in_window,
+        [HistoryMessage(created_at=utc_time_in, role="user", content="JST window message", metadata={})],
+    )
+    chat_memory.add_history(
+        user_id,
+        session_outside,
+        [HistoryMessage(created_at=utc_time_out, role="user", content="Outside window", metadata={})],
+    )
+
+    asyncio.run(chat_memory.create_summary(user_id, session_in_window))
+    asyncio.run(chat_memory.create_summary(user_id, session_outside))
+
+    # Knowledge in/out of window.
+    asyncio.run(chat_memory.add_knowledge(user_id, "knowledge inside window"))
+    asyncio.run(chat_memory.add_knowledge(user_id, "knowledge outside window"))
+
+    # Adjust summary timestamps to control filtering.
+    with chat_memory.get_db_cursor() as (cur, _):
+        cur.execute(
+            """
+            UPDATE conversation_summaries
+            SET created_at = %s, summary = %s
+            WHERE user_id = %s AND session_id = %s
+            """,
+            (utc_time_in, "JST window summary", user_id, session_in_window),
+        )
+        cur.execute(
+            """
+            UPDATE conversation_summaries
+            SET created_at = %s, summary = %s
+            WHERE user_id = %s AND session_id = %s
+            """,
+            (utc_time_out, "Outside summary", user_id, session_outside),
+        )
+        cur.execute(
+            """
+            UPDATE user_knowledge
+            SET created_at = %s
+            WHERE user_id = %s AND knowledge = %s
+            """,
+            (utc_time_in, user_id, "knowledge inside window"),
+        )
+        cur.execute(
+            """
+            UPDATE user_knowledge
+            SET created_at = %s
+            WHERE user_id = %s AND knowledge = %s
+            """,
+            (utc_time_out, user_id, "knowledge outside window"),
+        )
+
+    # Diaries in/out of local window (diary_date based on local day).
+    asyncio.run(
+        chat_memory.update_diary(
+            user_id=user_id,
+            diary_date=datetime.date(2025, 2, 7),
+            content="Diary inside window",
+            metadata={},
+        )
+    )
+    asyncio.run(
+        chat_memory.update_diary(
+            user_id=user_id,
+            diary_date=datetime.date(2025, 2, 5),
+            content="Diary outside window",
+            metadata={},
+        )
+    )
+
+    # Use JST offset; since/until = 2025-02-07 local day should include utc_time_in (UTC 2025-02-06 23:00)
+    search_result = asyncio.run(
+        chat_memory.search(
+            user_id,
+            "summary",
+            top_k=5,
+            search_content=False,
+            include_retrieved_data=True,
+            since=datetime.date(2025, 2, 7),
+            until=datetime.date(2025, 2, 7),
+            utc_offset_hours=9,
+        )
+    )
+
+    assert search_result.retrieved_data is not None
+    retrieved = search_result.retrieved_data
+    assert "JST window summary" in retrieved
+    assert "Outside summary" not in retrieved
+    assert "knowledge inside window" in retrieved
+    assert "knowledge outside window" not in retrieved
+    assert "Diary inside window" in retrieved
+    assert "Diary outside window" not in retrieved
+
+    # Cleanup
+    chat_memory.delete_history(user_id=user_id, session_id=session_in_window)
+    chat_memory.delete_history(user_id=user_id, session_id=session_outside)
+    chat_memory.delete_summaries(user_id=user_id, session_id=session_in_window)
+    chat_memory.delete_summaries(user_id=user_id, session_id=session_outside)
     chat_memory.delete_knowledge(user_id=user_id)
     chat_memory.delete_diary(user_id=user_id)
 

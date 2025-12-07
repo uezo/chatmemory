@@ -75,6 +75,44 @@ def test_history_endpoints(test_user, test_session):
     assert "session_ids" in data
     assert test_session in data["session_ids"]
 
+def test_history_since_until_api():
+    """Ensure /history honors since/until filters (exclusive upper bound)."""
+    user_id = str(uuid.uuid4())
+    session_id = f"session_{uuid.uuid4()}"
+
+    base_time = datetime.datetime.utcnow()
+    early = (base_time - datetime.timedelta(minutes=10)).isoformat()
+    boundary = (base_time - datetime.timedelta(minutes=5)).isoformat()
+    late = base_time.isoformat()
+
+    payload = {
+        "user_id": user_id,
+        "session_id": session_id,
+        "messages": [
+            {"created_at": early, "role": "user", "content": "early", "metadata": {}},
+            {"created_at": boundary, "role": "assistant", "content": "boundary", "metadata": {}},
+            {"created_at": late, "role": "user", "content": "late", "metadata": {}},
+        ],
+    }
+    assert client.post("/history", json=payload).status_code == 200
+
+    # since should include boundary and late
+    resp_since = client.get("/history", params={"user_id": user_id, "session_id": session_id, "since": boundary})
+    assert resp_since.status_code == 200
+    msgs_since = resp_since.json()["messages"]
+    assert all(msg["created_at"] >= boundary for msg in msgs_since)
+    assert len(msgs_since) == 2
+
+    # until should exclude the boundary itself
+    resp_until = client.get("/history", params={"user_id": user_id, "session_id": session_id, "until": boundary})
+    assert resp_until.status_code == 200
+    msgs_until = resp_until.json()["messages"]
+    assert all(msg["created_at"] < boundary for msg in msgs_until)
+    assert len(msgs_until) == 1
+    assert msgs_until[0]["content"] == "early"
+
+    client.delete("/history", params={"user_id": user_id, "session_id": session_id})
+
 def test_channel_field_api():
     """Test the channel field functionality through the API endpoints."""
     # Create unique user_id and session_id for this test to ensure isolation
@@ -428,6 +466,8 @@ def test_search_endpoint_since_until(monkeypatch):
     new_session = f"session_{uuid.uuid4()}"
     old_time = datetime.datetime.utcnow() - datetime.timedelta(days=3)
     since_time = datetime.datetime.utcnow() - datetime.timedelta(days=1)
+    until_date = (datetime.datetime.utcnow() - datetime.timedelta(hours=12)).date()
+    boundary = datetime.datetime.combine(until_date + datetime.timedelta(days=1), datetime.time.min)
 
     # Old session with backdated created_at.
     old_payload = {
@@ -454,7 +494,7 @@ def test_search_endpoint_since_until(monkeypatch):
     assert client.post("/summary/create", params={"user_id": user_id, "session_id": old_session}).status_code == 200
     assert client.post("/summary/create", params={"user_id": user_id, "session_id": new_session}).status_code == 200
 
-    # Backdate old summary to ensure filtering removes it.
+    # Backdate old summary and set new summary at the boundary to test exclusivity.
     with chat_memory.get_db_cursor() as (cur, _):
         cur.execute(
             """
@@ -463,6 +503,14 @@ def test_search_endpoint_since_until(monkeypatch):
             WHERE user_id = %s AND session_id = %s
             """,
             (old_time, user_id, old_session),
+        )
+        cur.execute(
+            """
+            UPDATE conversation_summaries
+            SET created_at = %s
+            WHERE user_id = %s AND session_id = %s
+            """,
+            (boundary, user_id, new_session),
         )
 
     # Diary entries.
@@ -475,6 +523,7 @@ def test_search_endpoint_since_until(monkeypatch):
         "user_id": user_id,
         "query": "robotics context",
         "since": since_time.date().isoformat(),
+        "until": until_date.isoformat(),
         "include_retrieved_data": True,
         "utc_offset_hours": 0,
     }
@@ -484,6 +533,7 @@ def test_search_endpoint_since_until(monkeypatch):
     retrieved = data["result"].get("retrieved_data", "")
     assert "robotics" in retrieved
     assert "Old session about sailing" not in retrieved
+    assert boundary.isoformat() not in retrieved
     assert "Old diary about sailing" not in retrieved
 
     # Cleanup
@@ -491,6 +541,111 @@ def test_search_endpoint_since_until(monkeypatch):
     client.delete("/history", params={"user_id": user_id, "session_id": new_session})
     client.delete("/summary", params={"user_id": user_id, "session_id": old_session})
     client.delete("/summary", params={"user_id": user_id, "session_id": new_session})
+    client.delete("/diary", params={"user_id": user_id})
+
+def test_search_endpoint_with_offset(monkeypatch):
+    """Ensure /search applies utc_offset_hours to summary/knowledge and diary date filters."""
+    fake_embedding = [0.04] * chat_memory.embedding_dimension
+
+    async def fake_embed(text: str):
+        return fake_embedding
+
+    async def fake_llm(system_prompt: str, user_prompt: str):
+        return "api-offset-answer"
+
+    monkeypatch.setattr(chat_memory, "embed", fake_embed)
+    monkeypatch.setattr(chat_memory, "llm", fake_llm)
+
+    user_id = str(uuid.uuid4())
+    session_in = f"session_{uuid.uuid4()}"
+    session_out = f"session_{uuid.uuid4()}"
+
+    utc_in = datetime.datetime(2025, 2, 6, 23, 0, 0)   # JST 2025-02-07 08:00
+    utc_out = datetime.datetime(2025, 2, 5, 12, 0, 0)  # JST 2025-02-05 21:00
+
+    # Histories
+    assert client.post("/history", json={
+        "user_id": user_id,
+        "session_id": session_in,
+        "messages": [{"created_at": utc_in.isoformat(), "role": "user", "content": "JST window message", "metadata": {}}]
+    }).status_code == 200
+    assert client.post("/history", json={
+        "user_id": user_id,
+        "session_id": session_out,
+        "messages": [{"created_at": utc_out.isoformat(), "role": "user", "content": "Outside window", "metadata": {}}]
+    }).status_code == 200
+
+    assert client.post("/summary/create", params={"user_id": user_id, "session_id": session_in}).status_code == 200
+    assert client.post("/summary/create", params={"user_id": user_id, "session_id": session_out}).status_code == 200
+
+    # Timestamps for summaries/knowledge to control filtering
+    with chat_memory.get_db_cursor() as (cur, _):
+        cur.execute(
+            """
+            UPDATE conversation_summaries
+            SET created_at = %s, summary = %s
+            WHERE user_id = %s AND session_id = %s
+            """,
+            (utc_in, "JST window summary", user_id, session_in),
+        )
+        cur.execute(
+            """
+            UPDATE conversation_summaries
+            SET created_at = %s, summary = %s
+            WHERE user_id = %s AND session_id = %s
+            """,
+            (utc_out, "Outside summary", user_id, session_out),
+        )
+
+    # Knowledge entries
+    assert client.post("/knowledge", json={"user_id": user_id, "knowledge": "knowledge inside window"}).status_code == 200
+    assert client.post("/knowledge", json={"user_id": user_id, "knowledge": "knowledge outside window"}).status_code == 200
+    with chat_memory.get_db_cursor() as (cur, _):
+        cur.execute(
+            """
+            UPDATE user_knowledge
+            SET created_at = %s
+            WHERE user_id = %s AND knowledge = %s
+            """,
+            (utc_in, user_id, "knowledge inside window"),
+        )
+        cur.execute(
+            """
+            UPDATE user_knowledge
+            SET created_at = %s
+            WHERE user_id = %s AND knowledge = %s
+            """,
+            (utc_out, user_id, "knowledge outside window"),
+        )
+
+    # Diary entries (date-only)
+    assert client.post("/diary", json={"user_id": user_id, "diary_date": "2025-02-07", "content": "Diary inside window"}).status_code == 200
+    assert client.post("/diary", json={"user_id": user_id, "diary_date": "2025-02-05", "content": "Diary outside window"}).status_code == 200
+
+    payload = {
+        "user_id": user_id,
+        "query": "summary",
+        "since": "2025-02-07",
+        "until": "2025-02-07",
+        "utc_offset_hours": 9,
+        "include_retrieved_data": True,
+    }
+    response = client.post("/search", json=payload)
+    assert response.status_code == 200
+    retrieved = response.json()["result"].get("retrieved_data", "")
+    assert "JST window summary" in retrieved
+    assert "Outside summary" not in retrieved
+    assert "knowledge inside window" in retrieved
+    assert "knowledge outside window" not in retrieved
+    assert "Diary inside window" in retrieved
+    assert "Diary outside window" not in retrieved
+
+    # Cleanup
+    client.delete("/history", params={"user_id": user_id, "session_id": session_in})
+    client.delete("/history", params={"user_id": user_id, "session_id": session_out})
+    client.delete("/summary", params={"user_id": user_id, "session_id": session_in})
+    client.delete("/summary", params={"user_id": user_id, "session_id": session_out})
+    client.delete("/knowledge", params={"user_id": user_id})
     client.delete("/diary", params={"user_id": user_id})
 
 def test_search_endpoint_multi_user(monkeypatch):
